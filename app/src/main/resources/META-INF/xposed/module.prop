@@ -1,0 +1,9 @@
+name=DouBanPurify
+version=1.0
+versionCode=1
+description=去除豆瓣广告与开屏，精简底栏与首页动态 (API 102)
+minApiVersion=102
+targetApiVersion=102
+staticScope=true
+exceptionMode=protective
+autoHotReload=false

@@ -1,0 +1,3 @@
+-keep class com.douban.pure.** { *; }
+-keep class io.github.libxposed.** { *; }
+-dontwarn androidx.drawerlayout.widget.**

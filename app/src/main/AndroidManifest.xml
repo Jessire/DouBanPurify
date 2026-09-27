@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <queries>
+        <package android:name="com.douban.frodo" />
+    </queries>
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        tools:targetApi="31">
+
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="去除豆瓣广告与开屏，精简底栏与首页动态 (API 102)" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="102" />
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/scope" />
+
+        <provider
+            android:name="io.github.libxposed.service.XposedProvider"
+            android:authorities="com.douban.pure.XposedService"
+            android:exported="true" />
+
+        <provider
+            android:name=".SettingsProvider"
+            android:authorities="com.douban.pure.settings"
+            android:exported="true" />
+
+    </application>
+
+</manifest>
