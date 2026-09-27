@@ -1,6 +1,7 @@
 package com.douban.pure;
 
 import android.app.Activity;
+import android.app.Application;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -49,7 +50,6 @@ public final class DoubanPureHook extends XposedModule {
         instance = this;
         Log.i(TAG, "DoubanPure onPackageReady: " + param.getPackageName());
         installBaseHooks(this, param.getClassLoader());
-        installAppHooks(this, param.getClassLoader());
     }
 
     private static void installBaseHooks(XposedInterface xposed, ClassLoader bootClassLoader) {
@@ -58,6 +58,21 @@ public final class DoubanPureHook extends XposedModule {
         }
 
         try {
+            // Hook Application.onCreate to catch early decrypted ClassLoader
+            try {
+                Method appOnCreate = Application.class.getDeclaredMethod("onCreate");
+                xposed.hook(appOnCreate).intercept(chain -> {
+                    Object res = chain.proceed();
+                    Object app = chain.getThisObject();
+                    if (app instanceof Application) {
+                        tryInstallRealHooks(xposed, ((Application) app).getClassLoader());
+                    }
+                    return res;
+                });
+            } catch (Throwable t) {
+                Log.w(TAG, "hook Application.onCreate warning: " + t);
+            }
+
             // Hook Activity.onCreate
             Method onCreate = Activity.class.getDeclaredMethod("onCreate", Bundle.class);
             xposed.hook(onCreate).intercept(chain -> {
@@ -79,8 +94,8 @@ public final class DoubanPureHook extends XposedModule {
                         Log.i(TAG, "Forced no_splash=true and show_main=true on SplashActivity");
                     }
 
-                    // Install app-classloader hooks as soon as real ClassLoader is available
-                    installAppHooks(xposed, act.getClassLoader());
+                    // Install hooks on decrypted ClassLoader as soon as real Activity ClassLoader is available
+                    tryInstallRealHooks(xposed, act.getClassLoader());
 
                     // Register settings changed listener
                     registerReceiverIfNeeded(act);
@@ -109,16 +124,23 @@ public final class DoubanPureHook extends XposedModule {
         }
     }
 
-    static void installAppHooks(XposedInterface xposed, ClassLoader appClassLoader) {
-        if (!APP_HOOKED.compareAndSet(false, true)) {
+    static void tryInstallRealHooks(XposedInterface xposed, ClassLoader cl) {
+        if (cl == null || APP_HOOKED.get()) {
             return;
         }
+
         try {
-            DoubanAdPurifier.install(xposed, appClassLoader);
-            DoubanLayoutPurifier.install(xposed, appClassLoader);
-            Log.i(TAG, "Douban app-classloader hooks installed successfully.");
+            // Check if YiDun has unpacked Douban's real classes
+            Class<?> feedAdClass = cl.loadClass("com.douban.frodo.baseproject.ad.model.FeedAd");
+            if (feedAdClass != null && APP_HOOKED.compareAndSet(false, true)) {
+                DoubanAdPurifier.install(xposed, cl);
+                DoubanLayoutPurifier.install(xposed, cl);
+                Log.i(TAG, "Successfully installed purifier hooks on unpacked ClassLoader!");
+            }
+        } catch (ClassNotFoundException e) {
+            Log.d(TAG, "Douban classes not unpacked yet in classloader: " + cl);
         } catch (Throwable t) {
-            Log.e(TAG, "installAppHooks error: " + t);
+            Log.w(TAG, "tryInstallRealHooks error: " + t);
         }
     }
 

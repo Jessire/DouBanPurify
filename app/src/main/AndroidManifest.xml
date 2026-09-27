@@ -31,14 +31,15 @@
 
         <provider
             android:name="io.github.libxposed.service.XposedProvider"
-            android:authorities="com.douban.pure.XposedService"
+            android:authorities="io.github.jessire.doubanpurify.XposedService"
             android:exported="true" />
 
         <provider
             android:name=".SettingsProvider"
-            android:authorities="com.douban.pure.settings"
+            android:authorities="io.github.jessire.doubanpurify.settings"
             android:exported="true" />
 
     </application>
 
 </manifest>
+

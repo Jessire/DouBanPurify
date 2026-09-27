@@ -8,7 +8,7 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.douban.pure"
+        applicationId "io.github.jessire.doubanpurify"
         minSdk 26
         targetSdk 35
         versionCode 1

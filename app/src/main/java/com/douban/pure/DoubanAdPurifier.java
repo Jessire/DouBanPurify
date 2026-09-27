@@ -46,6 +46,45 @@ public final class DoubanAdPurifier {
             }
             return chain.proceed();
         });
+        ReflectUtils.hookAllMethods(xposed, cls, cl, "isAd", chain -> false);
+        ReflectUtils.hookAllMethods(xposed, cls, cl, "isValid", chain -> false);
+        ReflectUtils.hookAllMethods(xposed, cls, cl, "isAvailable", chain -> false);
+
+        String[] adViewClasses = new String[]{
+                "com.douban.frodo.baseproject.ad.view.FeedAdItemParent",
+                "com.douban.frodo.baseproject.ad.view.FeedAdItemView1",
+                "com.douban.frodo.baseproject.ad.view.FeedAdItemView2",
+                "com.douban.frodo.baseproject.ad.view.FeedAdItemView3",
+                "com.douban.frodo.baseproject.ad.view.FeedAdItemView4",
+                "com.douban.frodo.baseproject.ad.view.FeedAdItemView5",
+                "com.douban.frodo.baseproject.ad.view.FeedAdItemView60",
+                "com.douban.frodo.baseproject.ad.view.FeedAdItemView7",
+                "com.douban.frodo.baseproject.ad.sdk.FeedAdItemSdkView",
+                "com.douban.frodo.baseproject.ad.view.RecentTopicAdView"
+        };
+        for (String adViewCls : adViewClasses) {
+            ReflectUtils.hookAllMethods(xposed, adViewCls, cl, "updateView", chain -> {
+                Object obj = chain.getThisObject();
+                if (obj instanceof View) {
+                    ((View) obj).setVisibility(View.GONE);
+                }
+                return null;
+            });
+            ReflectUtils.hookAllMethods(xposed, adViewCls, cl, "bind", chain -> {
+                Object obj = chain.getThisObject();
+                if (obj instanceof View) {
+                    ((View) obj).setVisibility(View.GONE);
+                }
+                return null;
+            });
+            ReflectUtils.hookAllMethods(xposed, adViewCls, cl, "populate", chain -> {
+                Object obj = chain.getThisObject();
+                if (obj instanceof View) {
+                    ((View) obj).setVisibility(View.GONE);
+                }
+                return null;
+            });
+        }
         Log.i(TAG, "FeedAd hooks installed");
     }
 
@@ -376,3 +415,4 @@ public final class DoubanAdPurifier {
         return null;
     }
 }
+

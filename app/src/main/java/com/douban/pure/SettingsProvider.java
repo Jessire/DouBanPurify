@@ -9,7 +9,7 @@ import android.net.Uri;
 import android.os.Bundle;
 
 public class SettingsProvider extends ContentProvider {
-    public static final String AUTHORITY = "com.douban.pure.settings";
+    public static final String AUTHORITY = "io.github.jessire.doubanpurify.settings";
     public static final Uri CONTENT_URI = Uri.parse("content://" + AUTHORITY);
 
     @Override
@@ -62,3 +62,4 @@ public class SettingsProvider extends ContentProvider {
         return 0;
     }
 }
+
