@@ -2,6 +2,7 @@ package com.douban.pure;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
@@ -11,6 +12,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import androidx.drawerlayout.widget.DrawerLayout;
@@ -31,10 +33,28 @@ public final class DoubanLayoutPurifier {
     }
 
     private static void preventTabStripInfiniteLoop(XposedInterface xposed, ClassLoader cl) {
-        ReflectUtils.hookAllMethods(xposed, "com.astuetz.PagerSlidingTabStrip$d", cl, "onGlobalLayout", chain -> null);
+        ReflectUtils.hookAllMethods(xposed, "com.astuetz.PagerSlidingTabStrip$d", cl, "onGlobalLayout", chain -> {
+            // Only suppress the listener for the home strips whose child sizes we change.
+            Object listener = chain.getThisObject();
+            if (listener != null) {
+                for (Field field : listener.getClass().getDeclaredFields()) {
+                    if (!ViewGroup.class.isAssignableFrom(field.getType())) continue;
+                    try {
+                        field.setAccessible(true);
+                        Object owner = field.get(listener);
+                        if (owner instanceof ViewGroup && isHomeStrip((ViewGroup) owner)) return null;
+                    } catch (ReflectiveOperationException ignored) {
+                    }
+                }
+            }
+            return chain.proceed();
+        });
 
         ReflectUtils.hookAllMethods(xposed, "com.astuetz.PagerSlidingTabStrip", cl, "resizeContentWidth", chain -> {
             Object strip = chain.getThisObject();
+            if (!(strip instanceof ViewGroup) || !isHomeStrip((ViewGroup) strip)) {
+                return chain.proceed();
+            }
             try {
                 Object sObj = ReflectUtils.getField(strip, "S");
                 if (sObj instanceof Integer && ((Integer) sObj) <= 0) {
@@ -67,7 +87,7 @@ public final class DoubanLayoutPurifier {
                 int pos = (int) chain.getArg(0);
                 CharSequence title = (CharSequence) chain.getArg(1);
                 Object strip = chain.getThisObject();
-                if (strip instanceof View) {
+                if (strip instanceof ViewGroup && isHomeTopStrip((ViewGroup) strip)) {
                     Context ctx = ((View) strip).getContext();
                     boolean hideDongtai = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_DONGTAI, true);
                     if (pos == 0 && hideDongtai && title != null && title.toString().contains("动态")) {
@@ -104,7 +124,7 @@ public final class DoubanLayoutPurifier {
                     if (hideTopics) {
                         return chain.proceed(new Object[]{View.GONE});
                     }
-                } else if (id == 0x7f0a02e1) {
+                } else if (id == 0x7f0a02e1 && isHomeView(view)) {
                     // Homepage: 发布按钮 (笔)
                     boolean hidePost = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_HOME_POST_BTN, true);
                     if (hidePost) {
@@ -176,9 +196,44 @@ public final class DoubanLayoutPurifier {
         }
     }
 
+    private static boolean isHomeView(View view) {
+        Context context = view.getContext();
+        // Views may use a themed wrapper rather than the Activity directly.
+        for (int i = 0; context != null && i < 16; i++) {
+            if (context instanceof Activity) {
+                return "com.douban.frodo.activity.SplashActivity".equals(context.getClass().getName());
+            }
+            if (!(context instanceof ContextWrapper)) return false;
+            Context base = ((ContextWrapper) context).getBaseContext();
+            if (base == context) return false;
+            context = base;
+        }
+        return false;
+    }
+
+    private static boolean isHomeTopStrip(ViewGroup strip) {
+        return isHomeView(strip) && strip.getId() == 0x7f0a14b8;
+    }
+
+    private static boolean isHomeBottomStrip(ViewGroup strip) {
+        if (!isHomeView(strip) || strip.getId() != 0x7f0a14bb
+                || strip.getChildCount() == 0 || !(strip.getChildAt(0) instanceof LinearLayout)) return false;
+        ViewGroup tabs = (ViewGroup) strip.getChildAt(0);
+        if (tabs.getChildCount() != 5) return false;
+        for (int i = 0; i < tabs.getChildCount(); i++) {
+            if (!"com.douban.frodo.view.MainTabItem".equals(tabs.getChildAt(i).getClass().getName())) return false;
+        }
+        return true;
+    }
+
+    private static boolean isHomeStrip(ViewGroup strip) {
+        return isHomeTopStrip(strip) || isHomeBottomStrip(strip);
+    }
+
     private static boolean isHomeHackViewPager(Object pager) {
-        if (pager == null) return false;
-        return pager.getClass().getName().contains("HackViewPager");
+        return pager instanceof View && isHomeView((View) pager)
+                && ((View) pager).getId() == 0x7f0a1950
+                && "com.douban.frodo.baseproject.view.HackViewPager".equals(pager.getClass().getName());
     }
 
     private static void hookHackViewPagerSwiping(XposedInterface xposed, ClassLoader cl) {
@@ -189,7 +244,7 @@ public final class DoubanLayoutPurifier {
                 if (onIntercept != null) {
                     xposed.hook(onIntercept).intercept(chain -> {
                         Object pager = chain.getThisObject();
-                        if (pager instanceof View) {
+                        if (isHomeHackViewPager(pager)) {
                             boolean hideDongtai = PureSettings.getBoolean(((View) pager).getContext(), PureSettings.KEY_HIDE_TOP_DONGTAI, true);
                             if (hideDongtai) {
                                 return false;
@@ -203,7 +258,7 @@ public final class DoubanLayoutPurifier {
                 if (onTouch != null) {
                     xposed.hook(onTouch).intercept(chain -> {
                         Object pager = chain.getThisObject();
-                        if (pager instanceof View) {
+                        if (isHomeHackViewPager(pager)) {
                             boolean hideDongtai = PureSettings.getBoolean(((View) pager).getContext(), PureSettings.KEY_HIDE_TOP_DONGTAI, true);
                             if (hideDongtai) {
                                 return false;
@@ -237,14 +292,14 @@ public final class DoubanLayoutPurifier {
     }
 
     public static void purgeStrip(ViewGroup strip) {
-        if (strip == null) return;
+        if (strip == null || !isHomeStrip(strip)) return;
         Context ctx = strip.getContext();
         if (strip.getChildCount() > 0 && strip.getChildAt(0) instanceof LinearLayout) {
             LinearLayout container = (LinearLayout) strip.getChildAt(0);
             int childCount = container.getChildCount();
 
             // Bottom bar has 5 tabs (0: 首页, 1: 书影音, 2: 小组, 3: 市集, 4: 我)
-            if (childCount == 5) {
+            if (childCount == 5 && isHomeBottomStrip(strip)) {
                 boolean hideSubject = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TAB_SUBJECT, true);
                 boolean hideGroup = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TAB_GROUP, true);
                 boolean hideShiji = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TAB_SHIJI, true);
@@ -262,7 +317,7 @@ public final class DoubanLayoutPurifier {
                         child.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.0f));
                     }
                 }
-            } else if (childCount == 2) {
+            } else if (childCount == 2 && isHomeTopStrip(strip)) {
                 // Top tab strip (0: 动态, 1: 推荐/精选)
                 boolean hideDongtai = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_DONGTAI, true);
                 View tab0 = container.getChildAt(0);
@@ -325,7 +380,7 @@ public final class DoubanLayoutPurifier {
         }
 
         // 3. Lock HackViewPager to 1 (推荐) if 动态 is hidden
-        if (className.contains("HackViewPager") && (view instanceof ViewGroup)) {
+        if (isHomeHackViewPager(view)) {
             boolean hideDongtai = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_DONGTAI, true);
             if (hideDongtai) {
                 try {
@@ -373,7 +428,7 @@ public final class DoubanLayoutPurifier {
                 }
             }
             // Homepage right bottom Post button (铅笔浮动按钮)
-            else if ("btn_post".equals(entryName) || id == 0x7f0a02e1) {
+            else if (("btn_post".equals(entryName) || id == 0x7f0a02e1) && isHomeView(view)) {
                 boolean hidePost = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_HOME_POST_BTN, true);
                 view.setVisibility(hidePost ? View.GONE : View.VISIBLE);
             }

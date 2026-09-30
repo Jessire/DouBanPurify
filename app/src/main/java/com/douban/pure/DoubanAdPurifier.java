@@ -32,23 +32,11 @@ public final class DoubanAdPurifier {
 
     private static void hookFeedAd(XposedInterface xposed, ClassLoader cl) {
         String cls = "com.douban.frodo.baseproject.ad.model.FeedAd";
-        ReflectUtils.hookAllMethods(xposed, cls, cl, "isBlocked", chain -> {
-            Context ctx = getContext(chain.getThisObject());
-            if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true)) {
-                return true;
-            }
-            return chain.proceed();
-        });
-        ReflectUtils.hookAllMethods(xposed, cls, cl, "getIsBlocked", chain -> {
-            Context ctx = getContext(chain.getThisObject());
-            if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true)) {
-                return true;
-            }
-            return chain.proceed();
-        });
-        ReflectUtils.hookAllMethods(xposed, cls, cl, "isAd", chain -> false);
-        ReflectUtils.hookAllMethods(xposed, cls, cl, "isValid", chain -> false);
-        ReflectUtils.hookAllMethods(xposed, cls, cl, "isAvailable", chain -> false);
+        hookBooleanAdMethod(xposed, cls, cl, "isBlocked", true);
+        hookBooleanAdMethod(xposed, cls, cl, "getIsBlocked", true);
+        hookBooleanAdMethod(xposed, cls, cl, "isAd", false);
+        hookBooleanAdMethod(xposed, cls, cl, "isValid", false);
+        hookBooleanAdMethod(xposed, cls, cl, "isAvailable", false);
 
         String[] adViewClasses = new String[]{
                 "com.douban.frodo.baseproject.ad.view.FeedAdItemParent",
@@ -86,6 +74,28 @@ public final class DoubanAdPurifier {
             });
         }
         Log.i(TAG, "FeedAd hooks installed");
+    }
+
+    private static void hookBooleanAdMethod(XposedInterface xposed, String className,
+                                            ClassLoader cl, String methodName, boolean blockedValue) {
+        Class<?> type = ReflectUtils.findClass(className, cl);
+        if (type == null) return;
+        for (Method method : type.getDeclaredMethods()) {
+            // isValid in Douban 7.134.0 returns an integer status, not a boolean.
+            // Preserve unknown contracts instead of guessing the meaning of a status code.
+            if (!methodName.equals(method.getName())
+                    || (method.getReturnType() != boolean.class && method.getReturnType() != Boolean.class)) continue;
+            try {
+                method.setAccessible(true);
+                xposed.hook(method).intercept(chain -> {
+                    Context ctx = getContext(chain.getThisObject());
+                    if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true)) return blockedValue;
+                    return chain.proceed();
+                });
+            } catch (Throwable t) {
+                Log.w(TAG, "Boolean ad hook failed: " + methodName + " - " + t);
+            }
+        }
     }
 
     private static void hookSplashRequestor(XposedInterface xposed, ClassLoader cl) {
