@@ -95,6 +95,31 @@ public final class ReflectUtils {
         return hookAllMethods(xposed, clazz, methodName, hooker);
     }
 
+    public static int hookMethodWithTypeSafety(XposedInterface xposed, Class<?> clazz, String methodName, Object nonVoidReturnValue) {
+        if (clazz == null || methodName == null) return 0;
+        int count = 0;
+        try {
+            for (Method m : clazz.getDeclaredMethods()) {
+                if (m.getName().equals(methodName)) {
+                    m.setAccessible(true);
+                    Class<?> ret = m.getReturnType();
+                    xposed.hook(m).intercept(chain -> {
+                        if (ret == void.class) return null;
+                        if (ret == boolean.class) return Boolean.TRUE.equals(nonVoidReturnValue);
+                        if (ret == Boolean.class) return nonVoidReturnValue instanceof Boolean ? nonVoidReturnValue : Boolean.TRUE;
+                        if (ret == int.class) return nonVoidReturnValue instanceof Integer ? nonVoidReturnValue : 0;
+                        if (ret == Integer.class) return nonVoidReturnValue instanceof Integer ? nonVoidReturnValue : Integer.valueOf(0);
+                        return nonVoidReturnValue;
+                    });
+                    count++;
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "hookMethodWithTypeSafety failed on " + clazz.getName() + "#" + methodName + ": " + t);
+        }
+        return count;
+    }
+
     public static Object getField(Object target, String fieldName) {
         if (target == null || fieldName == null) return null;
         Class<?> current = target.getClass();

@@ -154,4 +154,65 @@ public class PurifierRegressionTest {
         Method m=FeedAd.class.getDeclaredMethod("isBlocked");
         assertEquals(true,hooks.get(m).intercept(chain(m,new FeedAd())));
     }
+    static class MockFeedAdItemParent extends View {
+        public MockFeedAdItemParent(Context context) { super(context); }
+    }
+
+    @Test public void topicLlHeaderContainerAdAndAdjacentDividersArePurged() {
+        LinearLayout container = new LinearLayout(detail);
+        container.setId(0x7f0a0c67);
+
+        View content = new View(detail);
+        content.setId(0x7f0a1987);
+        content.setLayoutParams(new LinearLayout.LayoutParams(1000, 2000));
+        container.addView(content);
+
+        View topDivider = new View(detail);
+        topDivider.setLayoutParams(new LinearLayout.LayoutParams(1000, 38));
+        container.addView(topDivider);
+
+        MockFeedAdItemParent ad = new MockFeedAdItemParent(detail);
+        ad.setLayoutParams(new LinearLayout.LayoutParams(1000, 1200));
+        container.addView(ad);
+
+        View bottomDivider = new View(detail);
+        bottomDivider.setLayoutParams(new LinearLayout.LayoutParams(1000, 38));
+        container.addView(bottomDivider);
+
+        DoubanLayoutPurifier.purgeViews(container);
+
+        assertEquals(View.VISIBLE, content.getVisibility());
+        assertEquals(View.GONE, topDivider.getVisibility());
+        assertEquals(0, topDivider.getLayoutParams().height);
+        assertEquals(View.GONE, ad.getVisibility());
+        assertEquals(0, ad.getLayoutParams().height);
+        assertEquals(0, ad.getLayoutParams().width);
+        assertEquals(View.GONE, bottomDivider.getVisibility());
+        assertEquals(0, bottomDivider.getLayoutParams().height);
+    }
+
+    @Test public void homeHeaderContainerAndBannersAreHidden() {
+        View headerContainer = new View(home);
+        headerContainer.setId(0x7f0a08b0);
+        headerContainer.setLayoutParams(new LinearLayout.LayoutParams(1000, 300));
+
+        View headerLeft = new View(home);
+        headerLeft.setId(0x7f0a08bf);
+        headerLeft.setLayoutParams(new LinearLayout.LayoutParams(200, 100));
+
+        View headerRight = new View(home);
+        headerRight.setId(0x7f0a08c6);
+        headerRight.setLayoutParams(new LinearLayout.LayoutParams(200, 100));
+
+        DoubanLayoutPurifier.purgeViews(headerContainer);
+        DoubanLayoutPurifier.purgeViews(headerLeft);
+        DoubanLayoutPurifier.purgeViews(headerRight);
+
+        assertEquals(View.GONE, headerContainer.getVisibility());
+        assertEquals(0, headerContainer.getLayoutParams().height);
+        assertEquals(View.GONE, headerLeft.getVisibility());
+        assertEquals(0, headerLeft.getLayoutParams().height);
+        assertEquals(View.GONE, headerRight.getVisibility());
+        assertEquals(0, headerRight.getLayoutParams().height);
+    }
 }

@@ -110,7 +110,7 @@ public final class InAppSettingsDialog {
         header.addView(titleCol);
 
         TextView badge = new TextView(activity);
-        badge.setText(" v1.0 ");
+        badge.setText(" v1.3 ");
         badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         badge.setTextColor(DOUBAN_GREEN);
         badge.setTypeface(Typeface.DEFAULT_BOLD);
@@ -227,7 +227,7 @@ public final class InAppSettingsDialog {
         addSectionHeader(card4_1, "模块信息", activity);
         addInfoRow(card4_1, "模块名称", "DouBanPurify", primaryText, subText, activity);
         addDivider(card4_1, activity, isDark);
-        addInfoRow(card4_1, "模块版本", "v1.0", primaryText, subText, activity);
+        addInfoRow(card4_1, "模块版本", "v1.3", primaryText, subText, activity);
         addDivider(card4_1, activity, isDark);
         addInfoRow(card4_1, "适配目标", "豆瓣 Frodo (7.134.0)", primaryText, subText, activity);
         addDivider(card4_1, activity, isDark);

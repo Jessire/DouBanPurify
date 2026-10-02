@@ -119,25 +119,32 @@ public final class DoubanLayoutPurifier {
                 Context ctx = view.getContext();
 
                 if (id == 0x7f0a07cb || id == 0x7f0a07cc) {
-                    // Search page: 热门话题 title & topics list
                     boolean hideTopics = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SEARCH_HOT_TOPICS, true);
                     if (hideTopics) {
                         return chain.proceed(new Object[]{View.GONE});
                     }
                 } else if (id == 0x7f0a02e1 && isHomeView(view)) {
-                    // Homepage: 发布按钮 (笔)
                     boolean hidePost = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_HOME_POST_BTN, true);
                     if (hidePost) {
                         return chain.proceed(new Object[]{View.GONE});
                     }
+                } else if (id == 0x7f0a0ead || id == 0x7f0a18ea) {
+                    boolean hideBanner = PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true);
+                    if (hideBanner) {
+                        ViewGroup.LayoutParams lp = view.getLayoutParams();
+                        if (lp != null) {
+                            lp.width = 0;
+                            lp.height = 0;
+                            view.setLayoutParams(lp);
+                        }
+                        return chain.proceed(new Object[]{View.GONE});
+                    }
                 } else if (id == 0x7f0a08c6) {
-                    // Homepage: 宠物/活动横幅
                     boolean hidePets = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_PETS, true);
                     if (hidePets) {
                         return chain.proceed(new Object[]{View.GONE});
                     }
                 } else if (id == 0x7f0a0d6c) {
-                    // Homepage: 耳机/播客图标
                     boolean hidePodcast = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_PODCAST, true);
                     if (hidePodcast) {
                         return chain.proceed(new Object[]{View.GONE});
@@ -414,8 +421,10 @@ public final class DoubanLayoutPurifier {
                 boolean hidePodcast = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_PODCAST, true);
                 view.setVisibility(hidePodcast ? View.GONE : View.VISIBLE);
             }
-            // Header right banner (宠物/活动挂件)
-            else if ("header_right_banner".equals(entryName) || id == 0x7f0a08c6) {
+            // Header container, left image, right banner (首页顶部横幅、宠物及活动推广)
+            else if ("header_container".equals(entryName) || id == 0x7f0a08b0
+                    || "header_left_image".equals(entryName) || id == 0x7f0a08bf
+                    || "header_right_banner".equals(entryName) || id == 0x7f0a08c6) {
                 boolean hidePets = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_PETS, true);
                 view.setVisibility(hidePets ? View.GONE : View.VISIBLE);
                 if (hidePets) {
@@ -424,6 +433,62 @@ public final class DoubanLayoutPurifier {
                         lp.width = 0;
                         lp.height = 0;
                         view.setLayoutParams(lp);
+                    }
+                }
+            }
+            // Home notification / venue banner (播客马拉松/活动/场馆横幅: notification_container / venue)
+            else if ("notification_container".equals(entryName) || id == 0x7f0a0ead
+                    || entryName.startsWith("venue_") || id == 0x7f0a18ea || id == 0x7f0a18eb
+                    || id == 0x7f0a18ed || id == 0x7f0a18ec || id == 0x7f0a0c1f || id == 0x7f0a0c20) {
+                boolean hideBanner = PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true);
+                if (hideBanner) {
+                    view.setVisibility(View.GONE);
+                    ViewGroup.LayoutParams lp = view.getLayoutParams();
+                    if (lp != null) {
+                        lp.width = 0;
+                        lp.height = 0;
+                        view.setLayoutParams(lp);
+                    }
+                }
+            }
+            // RexxarStructHeader llHeaderContainer (contains post WebView, post big ad, and ad dividers)
+            else if ("llHeaderContainer".equals(entryName) || id == 0x7f0a0c67) {
+                if (view instanceof ViewGroup) {
+                    ViewGroup vg = (ViewGroup) view;
+                    int childCount = vg.getChildCount();
+                    for (int i = 0; i < childCount; i++) {
+                        View child = vg.getChildAt(i);
+                        if (child != null && isAdView(child)) {
+                            child.setVisibility(View.GONE);
+                            ViewGroup.LayoutParams clp = child.getLayoutParams();
+                            if (clp != null) {
+                                clp.width = 0;
+                                clp.height = 0;
+                                child.setLayoutParams(clp);
+                            }
+                            if (i > 0) {
+                                View prev = vg.getChildAt(i - 1);
+                                if (isDividerView(prev)) {
+                                    prev.setVisibility(View.GONE);
+                                    ViewGroup.LayoutParams plp = prev.getLayoutParams();
+                                    if (plp != null) {
+                                        plp.height = 0;
+                                        prev.setLayoutParams(plp);
+                                    }
+                                }
+                            }
+                            if (i < childCount - 1) {
+                                View next = vg.getChildAt(i + 1);
+                                if (isDividerView(next)) {
+                                    next.setVisibility(View.GONE);
+                                    ViewGroup.LayoutParams nlp = next.getLayoutParams();
+                                    if (nlp != null) {
+                                        nlp.height = 0;
+                                        next.setLayoutParams(nlp);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -451,6 +516,32 @@ public final class DoubanLayoutPurifier {
             else if ("vpSubject".equals(entryName) || "pageIndicatorView".equals(entryName) || id == 0x7f0a1978 || id == 0x7f0a0f6d) {
                 boolean hideTrends = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SEARCH_TRENDS, false);
                 view.setVisibility(hideTrends ? View.GONE : View.VISIBLE);
+            }
+        }
+
+        // Ad views & banners
+        if (isAdView(view)) {
+            boolean hideAd = PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true);
+            if (hideAd) {
+                view.setVisibility(View.GONE);
+                ViewGroup.LayoutParams lp = view.getLayoutParams();
+                if (lp != null) {
+                    lp.width = 0;
+                    lp.height = 0;
+                    view.setLayoutParams(lp);
+                }
+            }
+        }
+        if (className.equals("com.youth.banner.Banner")) {
+            boolean hideBanner = PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true);
+            if (hideBanner) {
+                view.setVisibility(View.GONE);
+                ViewGroup.LayoutParams lp = view.getLayoutParams();
+                if (lp != null) {
+                    lp.width = 0;
+                    lp.height = 0;
+                    view.setLayoutParams(lp);
+                }
             }
         }
 
@@ -555,6 +646,32 @@ public final class DoubanLayoutPurifier {
             return sb.toString();
         }
         return "";
+    }
+
+    public static boolean isAdView(View view) {
+        if (view == null) return false;
+        int id = view.getId();
+        if (id == 0x7f0a0ead || id == 0x7f0a18ea) {
+            return true;
+        }
+        String name = view.getClass().getName();
+        return name.contains("FeedAdItem")
+                || name.contains("FeedAdBanner")
+                || name.contains("RecentTopicAdView")
+                || name.contains("SubjectAdHeader")
+                || name.contains("AdIntersView")
+                || name.contains("FeedAdPhotoView")
+                || name.contains("IncentiveAdFooter")
+                || name.contains("PullAdContainer");
+    }
+
+    public static boolean isDividerView(View view) {
+        if (view == null) return false;
+        if (view.getClass() != View.class) return false;
+        if (view.getId() != View.NO_ID) return false;
+        ViewGroup.LayoutParams lp = view.getLayoutParams();
+        if (lp == null) return false;
+        return lp.height > 0 && lp.height <= 100;
     }
 }
 

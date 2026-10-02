@@ -1,5 +1,36 @@
 # 项目状态
 
+## 2026-10-03: 帖子底部大广告、首页活动/播客横幅彻底屏蔽与全量广告SDK兜底防御 (v1.3)
+
+- 宿主: 豆瓣 7.134.0, 模块 API 102.
+- 核心修改与根因:
+  1. 帖子底部大广告屏蔽:
+     - 根因: 讨论帖与各类详情页（`RexxarAdActivity2` / `GroupTopicActivity2`）在正文 WebView 加载完成后, 动态构建并向 `RexxarStructHeader` 的 `llHeaderContainer` (`0x7f0a0c67`) 中添加 `FeedAdItemParent` (包含 `FeedAdItemView1` 及上下两条 38px 分隔线). 原先模块仅 Hook 了 `updateView`/`bind`/`populate`, 但 `FeedAdItemParent` 不走这些方法.
+     - 修复方案:
+       - 在 `DoubanAdPurifier` 中拦截 `RexxarAdActivity2.buildAdContainer` 与 `ViewGroup.addView`, 检测到广告 View 时直接丢弃且禁止挂载.
+       - 为 `FeedAdItemParent` 以及所有 `FeedAdItemView1~7`、`FeedAdItemSdkView`、`FeedAdItemFakeView`、`RecentTopicAdView`、`FeedAdBannerView` 等广告类实现全生命周期拦截: `onMeasure` 强制 `(0, 0)`、`setVisibility` 强制 `GONE`、`onAttachedToWindow` 宽高置 0.
+       - 在 `DoubanLayoutPurifier` 遍历时对 `llHeaderContainer` 的子 View 进行净化, 发现广告卡片时将其及相邻的上下空白分割线一同设为 `GONE` 且高度归零.
+  2. 首页顶部活动/播客横幅屏蔽:
+     - 根因: 首页精选顶部动态插入 `notification_container` (`0x7f0a0ead`) 及 `venue_...` 视图（如「播客马拉松10月收听开赛」横幅）, 原先未对该容器和对应 Binding 做拦截.
+     - 修复方案:
+       - Hook `ItemNotificationVenueViewBinding`、`ItemNotificationViewBinding` 等的数据绑定与充填方法, 根视图直接设为 `GONE` 且宽高置 0.
+       - 拦截 `0x7f0a0ead` (`notification_container`)、`0x7f0a18ea` (`venue_bg`)、`0x7f0a08b0` (`header_container`)、`0x7f0a08bf` (`header_left_image`)、`0x7f0a08c6` (`header_right_banner`) 的可见性与尺寸.
+       - 拦截 `HomeHeaderModel` 获取与刷新 `HomeHeaderAd` (`/api/v2/home_ads`).
+  3. 全量广告 SDK 兜底与防崩溃加固:
+     - 字节穿山甲 (CSJ): `TTAdNative` 全量广告加载方法（Feed/Splash/Draw/Banner/NativeExpress/Stream/Reward/FullScreen）全部拦截为空; 启动委托 Activity `TTDelegateActivity` 立即 finish; 允许 `TTAdSdk.init` 正常返回避免空指针, 拦截后续广告拉取.
+     - 腾讯优量汇 (GDT): 拦截 `NativeUnifiedAD`、`NativeExpressAD`、`SplashAD`、`UnifiedInterstitialAD`、`RewardVideoAD` 全量广告请求.
+     - 京东联盟 (JAD): 拦截 `JADBanner`、`JADFeeds`、`JADSplash`、`JADInterstitial` 的广告拉取.
+     - 百度联盟 (MobAds): 拦截 `BaiduNativeManager` (Feed/Express/Native) 与 `SplashAd`.
+     - 豆瓣原生广告分发: 拦截 `AbstractSdkFetcher.doFetch`、`AdIntersManager`、`PullAdContainer`、`SubjectAdHeader`.
+  4. 版本升级:
+     - `versionCode` 升至 4, `versionName` 升至 `1.3`, 同步更新 `module.prop` 与应用内设置弹窗版本标签.
+- 验证结果:
+  1. 本地单元测试 16 项全部通过 (`app:testDebugUnitTest`).
+  2. 真机覆盖安装 (`DouBanPurify-v1.3.apk`) 并冷启动豆瓣实测:
+     - 首页「精选」顶部原先的「播客马拉松10月收听开赛」红色横幅彻底消失, 首页直出内容流, 布局紧凑无多余空白.
+     - 进入之前留存的帖子（`emoji乐子组` 帖子 `501254493`）, 滑动到正文最底部（「该小组已开启防搬运功能」下方）, 原先占满大半屏的「百度网盘」商业大广告及上下留白线完全消失, 正文底部与「回复/评论」区域无缝贴合.
+     - 应用内侧边栏「DouBanPurify 净化设置」入口正常, 无崩溃报错.
+
 ## 2026-09-30: 影视详情与讨论页三个 Bug 修复完成并通过实机验证
 
 - 宿主: 豆瓣 7.134.0, 模块 API 102.

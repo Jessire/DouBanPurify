@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
 
 import java.lang.reflect.Method;
 
@@ -24,10 +25,14 @@ public final class DoubanAdPurifier {
         hookSplashRequestor(xposed, cl);
         hookSplashActivity(xposed, cl);
         hookSplashFragment(xposed, cl);
-        hookByteDanceAndTencentAds(xposed, cl);
+        hookRexxarAdActivity(xposed, cl);
+        hookHomeHeaderAd(xposed, cl);
+        hookNotificationVenueBanner(xposed, cl);
+        hookThirdPartyAndSdkAds(xposed, cl);
         hookAdDurationAndTimeouts(xposed, cl);
         hookBetaUpdateAndRating(xposed, cl);
         hookUmeng(xposed, cl);
+        hookViewGroupAddView(xposed);
     }
 
     private static void hookFeedAd(XposedInterface xposed, ClassLoader cl) {
@@ -47,31 +52,65 @@ public final class DoubanAdPurifier {
                 "com.douban.frodo.baseproject.ad.view.FeedAdItemView5",
                 "com.douban.frodo.baseproject.ad.view.FeedAdItemView60",
                 "com.douban.frodo.baseproject.ad.view.FeedAdItemView7",
+                "com.douban.frodo.baseproject.ad.view.FeedAdItemFakeView",
                 "com.douban.frodo.baseproject.ad.sdk.FeedAdItemSdkView",
-                "com.douban.frodo.baseproject.ad.view.RecentTopicAdView"
+                "com.douban.frodo.baseproject.ad.view.RecentTopicAdView",
+                "com.douban.frodo.baseproject.ad.banner.FeedAdBannerView",
+                "com.douban.frodo.baseproject.ad.photo.FeedAdPhotoView",
+                "com.douban.frodo.baseproject.ad.photo.IncentiveAdFooter",
+                "com.douban.frodo.baseproject.ad.interstitial.AdIntersView"
         };
         for (String adViewCls : adViewClasses) {
-            ReflectUtils.hookAllMethods(xposed, adViewCls, cl, "updateView", chain -> {
-                Object obj = chain.getThisObject();
-                if (obj instanceof View) {
-                    ((View) obj).setVisibility(View.GONE);
+            ReflectUtils.hookAllMethods(xposed, adViewCls, cl, "setVisibility", chain -> {
+                Context ctx = getContext(chain.getThisObject());
+                if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true)) {
+                    return chain.proceed(new Object[]{View.GONE});
                 }
-                return null;
+                return chain.proceed();
             });
-            ReflectUtils.hookAllMethods(xposed, adViewCls, cl, "bind", chain -> {
-                Object obj = chain.getThisObject();
-                if (obj instanceof View) {
-                    ((View) obj).setVisibility(View.GONE);
+            ReflectUtils.hookAllMethods(xposed, adViewCls, cl, "onMeasure", chain -> {
+                Context ctx = getContext(chain.getThisObject());
+                if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true)) {
+                    Object obj = chain.getThisObject();
+                    if (obj instanceof View) {
+                        View v = (View) obj;
+                        try {
+                            Method setMD = View.class.getDeclaredMethod("setMeasuredDimension", int.class, int.class);
+                            setMD.setAccessible(true);
+                            setMD.invoke(v, 0, 0);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                    return null;
                 }
-                return null;
+                return chain.proceed();
             });
-            ReflectUtils.hookAllMethods(xposed, adViewCls, cl, "populate", chain -> {
-                Object obj = chain.getThisObject();
-                if (obj instanceof View) {
-                    ((View) obj).setVisibility(View.GONE);
+            ReflectUtils.hookAllMethods(xposed, adViewCls, cl, "onAttachedToWindow", chain -> {
+                Context ctx = getContext(chain.getThisObject());
+                if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true)) {
+                    Object obj = chain.getThisObject();
+                    if (obj instanceof View) {
+                        View v = (View) obj;
+                        v.setVisibility(View.GONE);
+                        ViewGroup.LayoutParams lp = v.getLayoutParams();
+                        if (lp != null) {
+                            lp.width = 0;
+                            lp.height = 0;
+                            v.setLayoutParams(lp);
+                        }
+                    }
                 }
-                return null;
+                return chain.proceed();
             });
+
+            String[] updateMethods = {"updateView", "updateFeedAd", "bind", "bindFeed", "populate",
+                    "setAd", "setFeedAd", "setData", "init", "initView", "initAdBanner", "showAd", "continueLoopPlay$core_release"};
+            for (String uMethod : updateMethods) {
+                Class<?> clazz = ReflectUtils.findClass(adViewCls, cl);
+                if (clazz != null) {
+                    ReflectUtils.hookMethodWithTypeSafety(xposed, clazz, uMethod, null);
+                }
+            }
         }
         Log.i(TAG, "FeedAd hooks installed");
     }
@@ -81,8 +120,6 @@ public final class DoubanAdPurifier {
         Class<?> type = ReflectUtils.findClass(className, cl);
         if (type == null) return;
         for (Method method : type.getDeclaredMethods()) {
-            // isValid in Douban 7.134.0 returns an integer status, not a boolean.
-            // Preserve unknown contracts instead of guessing the meaning of a status code.
             if (!methodName.equals(method.getName())
                     || (method.getReturnType() != boolean.class && method.getReturnType() != Boolean.class)) continue;
             try {
@@ -95,6 +132,233 @@ public final class DoubanAdPurifier {
             } catch (Throwable t) {
                 Log.w(TAG, "Boolean ad hook failed: " + methodName + " - " + t);
             }
+        }
+    }
+
+    private static void hookRexxarAdActivity(XposedInterface xposed, ClassLoader cl) {
+        String cls = "com.douban.frodo.struct2.RexxarAdActivity2";
+        Class<?> clazz = ReflectUtils.findClass(cls, cl);
+        if (clazz == null) return;
+        ReflectUtils.hookMethodWithTypeSafety(xposed, clazz, "buildAdContainer", null);
+    }
+
+    private static void hookHomeHeaderAd(XposedInterface xposed, ClassLoader cl) {
+        String modelCls = "com.douban.frodo.fragment.homeheader.HomeHeaderModel";
+        Class<?> modelClass = ReflectUtils.findClass(modelCls, cl);
+        if (modelClass != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, modelClass, "getHomeHeader", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, modelClass, "refreshHomeHeader", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, modelClass, "updateHomeHeader", null);
+        }
+
+        String netCls = "n5.e";
+        Class<?> netClass = ReflectUtils.findClass(netCls, cl);
+        if (netClass != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, netClass, "y", null);
+        }
+    }
+
+    private static void hookNotificationVenueBanner(XposedInterface xposed, ClassLoader cl) {
+        String[] bindingClasses = {
+                "com.douban.frodo.databinding.ItemNotificationVenueViewBinding",
+                "com.douban.frodo.databinding.ItemNotificationViewBinding",
+                "com.douban.frodo.databinding.ItemNotificationViewLayoutDefaultBinding",
+                "com.douban.frodo.databinding.ItemNotificationViewLayoutTvCalendarBinding"
+        };
+        for (String bCls : bindingClasses) {
+            Class<?> clazz = ReflectUtils.findClass(bCls, cl);
+            if (clazz != null) {
+                ReflectUtils.hookAllMethods(xposed, clazz, "bind", chain -> {
+                    Object res = chain.proceed();
+                    try {
+                        Method getRoot = clazz.getMethod("getRoot");
+                        View root = (View) getRoot.invoke(res);
+                        if (root != null) {
+                            root.setVisibility(View.GONE);
+                            ViewGroup.LayoutParams lp = root.getLayoutParams();
+                            if (lp != null) {
+                                lp.width = 0;
+                                lp.height = 0;
+                                root.setLayoutParams(lp);
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    return res;
+                });
+                ReflectUtils.hookAllMethods(xposed, clazz, "inflate", chain -> {
+                    Object res = chain.proceed();
+                    try {
+                        Method getRoot = clazz.getMethod("getRoot");
+                        View root = (View) getRoot.invoke(res);
+                        if (root != null) {
+                            root.setVisibility(View.GONE);
+                            ViewGroup.LayoutParams lp = root.getLayoutParams();
+                            if (lp != null) {
+                                lp.width = 0;
+                                lp.height = 0;
+                                root.setLayoutParams(lp);
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    return res;
+                });
+            }
+        }
+    }
+
+    private static void hookThirdPartyAndSdkAds(XposedInterface xposed, ClassLoader cl) {
+        // 1. ByteDance CSJ: Hook ad loaders on TTAdNative
+        String ttAdNative = "com.bytedance.sdk.openadsdk.TTAdNative";
+        Class<?> ttNativeCls = ReflectUtils.findClass(ttAdNative, cl);
+        if (ttNativeCls != null) {
+            String[] ttMethods = {"loadFeedAd", "loadSplashAd", "loadDrawFeedAd", "loadBannerExpressAd",
+                    "loadNativeExpressAd", "loadStream", "loadRewardVideoAd", "loadFullScreenVideoAd"};
+            for (String m : ttMethods) {
+                ReflectUtils.hookMethodWithTypeSafety(xposed, ttNativeCls, m, null);
+            }
+        }
+
+        // TTDelegateActivity
+        String ttDelegate = "com.bytedance.sdk.openadsdk.core.activity.base.TTDelegateActivity";
+        ReflectUtils.hookMethod(xposed, ttDelegate, cl, "onCreate", new Class<?>[]{Bundle.class}, chain -> {
+            try {
+                Activity act = (Activity) chain.getThisObject();
+                act.finish();
+                Log.i(TAG, "TTDelegateActivity finished immediately");
+                return null;
+            } catch (Throwable ignored) {
+            }
+            return chain.proceed();
+        });
+
+        // 2. Tencent GDT: Hook ad loaders
+        Class<?> gdtAd = ReflectUtils.findClass("com.qq.e.ads.nativ.NativeUnifiedAD", cl);
+        if (gdtAd != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtAd, "loadData", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtAd, "loadAD", null);
+        }
+
+        Class<?> gdtExpress = ReflectUtils.findClass("com.qq.e.ads.nativ.NativeExpressAD", cl);
+        if (gdtExpress != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtExpress, "loadAD", null);
+        }
+
+        Class<?> gdtSplash = ReflectUtils.findClass("com.qq.e.ads.splash.SplashAD", cl);
+        if (gdtSplash != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtSplash, "fetchAndShowIn", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtSplash, "fetchFullScreenAndShowIn", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtSplash, "fetchAdOnly", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtSplash, "showAd", null);
+        }
+
+        Class<?> gdtInters = ReflectUtils.findClass("com.qq.e.ads.interstitial2.UnifiedInterstitialAD", cl);
+        if (gdtInters != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtInters, "loadAD", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtInters, "show", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtInters, "showAsPopupWindow", null);
+        }
+
+        Class<?> gdtReward = ReflectUtils.findClass("com.qq.e.ads.rewardvideo.RewardVideoAD", cl);
+        if (gdtReward != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtReward, "loadAD", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtReward, "showAD", null);
+        }
+
+        // 3. Jingdong Ad SDK (JAD)
+        String[] jadClasses = {
+                "com.jd.ad.sdk.JADBanner",
+                "com.jd.ad.sdk.banner.JADBanner",
+                "com.jd.ad.sdk.JADFeeds",
+                "com.jd.ad.sdk.feed.JADFeed",
+                "com.jd.ad.sdk.JADSplash",
+                "com.jd.ad.sdk.splash.JADSplash",
+                "com.jd.ad.sdk.JADInterstitial",
+                "com.jd.ad.sdk.interstitial.JADInterstitial"
+        };
+        for (String jadCls : jadClasses) {
+            Class<?> jc = ReflectUtils.findClass(jadCls, cl);
+            if (jc != null) {
+                ReflectUtils.hookMethodWithTypeSafety(xposed, jc, "loadAd", null);
+            }
+        }
+
+        // 4. Baidu MobAds
+        Class<?> baiduNative = ReflectUtils.findClass("com.baidu.mobads.sdk.api.BaiduNativeManager", cl);
+        if (baiduNative != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduNative, "loadFeedAd", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduNative, "loadExpressAd", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduNative, "loadNativeAd", null);
+        }
+
+        Class<?> baiduSplash = ReflectUtils.findClass("com.baidu.mobads.sdk.api.SplashAd", cl);
+        if (baiduSplash != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduSplash, "loadAndShow", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduSplash, "load", null);
+        }
+
+        // 5. Douban Internal Ad Fetchers
+        Class<?> sdkFetcher = ReflectUtils.findClass("com.douban.frodo.baseproject.ad.sdk.AbstractSdkFetcher", cl);
+        if (sdkFetcher != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, sdkFetcher, "doFetch", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, sdkFetcher, "fetch", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, sdkFetcher, "fetchAd", null);
+        }
+
+        Class<?> intersMgr = ReflectUtils.findClass("com.douban.frodo.baseproject.ad.interstitial.AdIntersManager", cl);
+        if (intersMgr != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, intersMgr, "show", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, intersMgr, "showAd", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, intersMgr, "showIntersCard", null);
+        }
+
+        Class<?> pullAd = ReflectUtils.findClass("com.douban.frodo.baseproject.pullad.PullAdContainer", cl);
+        if (pullAd != null) {
+            ReflectUtils.hookMethodWithTypeSafety(xposed, pullAd, "showAd", null);
+            ReflectUtils.hookMethodWithTypeSafety(xposed, pullAd, "loadAd", null);
+        }
+
+        Class<?> subjectAd = ReflectUtils.findClass("com.douban.frodo.subject.view.SubjectAdHeader", cl);
+        if (subjectAd != null) {
+            ReflectUtils.hookAllMethods(xposed, subjectAd, "initView", chain -> {
+                Object obj = chain.getThisObject();
+                if (obj instanceof View) ((View) obj).setVisibility(View.GONE);
+                return null;
+            });
+            ReflectUtils.hookAllMethods(xposed, subjectAd, "updateView", chain -> {
+                Object obj = chain.getThisObject();
+                if (obj instanceof View) ((View) obj).setVisibility(View.GONE);
+                return null;
+            });
+        }
+
+        Log.i(TAG, "Third-party and internal ad hooks installed");
+    }
+
+    private static void hookViewGroupAddView(XposedInterface xposed) {
+        try {
+            Method addViewMethod = ViewGroup.class.getDeclaredMethod(
+                    "addView", View.class, int.class, ViewGroup.LayoutParams.class);
+            xposed.hook(addViewMethod).intercept(chain -> {
+                View child = (View) chain.getArg(0);
+                if (child != null && DoubanLayoutPurifier.isAdView(child)) {
+                    Context ctx = child.getContext();
+                    if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true)) {
+                        child.setVisibility(View.GONE);
+                        ViewGroup.LayoutParams lp = (ViewGroup.LayoutParams) chain.getArg(2);
+                        if (lp != null) {
+                            lp.width = 0;
+                            lp.height = 0;
+                        }
+                        return null;
+                    }
+                }
+                return chain.proceed();
+            });
+            Log.i(TAG, "ViewGroup.addView ad interceptor installed");
+        } catch (Throwable t) {
+            Log.w(TAG, "hook ViewGroup.addView failed: " + t);
         }
     }
 
@@ -123,29 +387,21 @@ public final class DoubanAdPurifier {
         ReflectUtils.hookAllMethods(xposed, "com.douban.frodo.splash.SplashAdShowUtils", cl, "showSplashAd", chain -> null);
 
         // AdApi splash request
-        ReflectUtils.hookAllMethods(xposed, "com.douban.ad.api.AdApi", cl, "requestSplashShow", chain -> null);
+        String adApi = "com.douban.frodo.network.AdApi";
+        ReflectUtils.hookAllMethods(xposed, adApi, cl, "getSplashAd", chain -> null);
+        ReflectUtils.hookAllMethods(xposed, adApi, cl, "requestSplashAd", chain -> null);
 
-        // AdView b
-        ReflectUtils.hookAllMethods(xposed, "com.douban.ad.AdView", cl, "b", chain -> null);
         Log.i(TAG, "Splash requestor hooks installed");
     }
 
     private static void hookSplashActivity(XposedInterface xposed, ClassLoader cl) {
         String splashCls = "com.douban.frodo.activity.SplashActivity";
-        ReflectUtils.hookAllMethods(xposed, splashCls, cl, "isSplashHot", chain -> {
-            Object obj = chain.getThisObject();
-            Context ctx = obj instanceof Activity ? (Context) obj : null;
-            if (PureSettings.getBoolean(ctx, PureSettings.KEY_SKIP_SPLASH, true)) {
-                return false;
-            }
-            return chain.proceed();
-        });
 
-        ReflectUtils.hookAllMethods(xposed, splashCls, cl, "isSplashResume", chain -> {
+        ReflectUtils.hookAllMethods(xposed, splashCls, cl, "showSplashAdContainer", chain -> {
             Object obj = chain.getThisObject();
             Context ctx = obj instanceof Activity ? (Context) obj : null;
             if (PureSettings.getBoolean(ctx, PureSettings.KEY_SKIP_SPLASH, true)) {
-                return false;
+                return null;
             }
             return chain.proceed();
         });
@@ -177,26 +433,28 @@ public final class DoubanAdPurifier {
             return chain.proceed();
         });
 
-        ReflectUtils.hookAllMethods(xposed, splashCls, cl, "fallbackShowDefaultSplash", chain -> {
-            Object obj = chain.getThisObject();
-            Context ctx = obj instanceof Activity ? (Context) obj : null;
-            if (PureSettings.getBoolean(ctx, PureSettings.KEY_SKIP_SPLASH, true)) {
-                return null;
-            }
+        ReflectUtils.hookAllMethods(xposed, splashCls, cl, "gotoMainActivity", chain -> {
             return chain.proceed();
         });
 
-        // Hot splash activity
-        String hotCls = "com.douban.frodo.activity.SplashActivityHot";
-        ReflectUtils.hookMethod(xposed, hotCls, cl, "onCreate", new Class<?>[]{Bundle.class}, chain -> {
-            try {
-                Activity act = (Activity) chain.getThisObject();
-                if (PureSettings.getBoolean(act, PureSettings.KEY_SKIP_SPLASH, true)) {
-                    act.finish();
-                    Log.i(TAG, "SplashActivityHot finished immediately");
-                    return null;
+        ReflectUtils.hookAllMethods(xposed, splashCls, cl, "initSplashFragment", chain -> {
+            Object obj = chain.getThisObject();
+            Context ctx = obj instanceof Activity ? (Context) obj : null;
+            if (PureSettings.getBoolean(ctx, PureSettings.KEY_SKIP_SPLASH, true)) {
+                Activity act = (Activity) obj;
+                try {
+                    Method m = splashCls.equals(act.getClass().getName())
+                            ? act.getClass().getDeclaredMethod("gotoMainActivity")
+                            : ReflectUtils.findMethod(act.getClass(), "gotoMainActivity");
+                    if (m != null) {
+                        m.setAccessible(true);
+                        m.invoke(act);
+                        Log.i(TAG, "initSplashFragment redirected to gotoMainActivity");
+                        return null;
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "gotoMainActivity reflection failed: " + t);
                 }
-            } catch (Throwable ignored) {
             }
             return chain.proceed();
         });
@@ -208,57 +466,31 @@ public final class DoubanAdPurifier {
                 "com.douban.frodo.splash.s"
         };
         for (String fragCls : splashFragmentClasses) {
-            ReflectUtils.hookMethod(xposed, fragCls, cl, "onViewCreated", new Class<?>[]{View.class, Bundle.class}, chain -> {
-                Object res = chain.proceed();
-                try {
-                    View view = (View) chain.getArg(0);
-                    Context ctx = view != null ? view.getContext() : null;
-                    if (PureSettings.getBoolean(ctx, PureSettings.KEY_SKIP_SPLASH, true)) {
-                        Object handler = ReflectUtils.getField(chain.getThisObject(), "J");
-                        if (handler instanceof Handler) {
-                            ((Handler) handler).removeCallbacksAndMessages(null);
-                        }
-                        Method b1 = ReflectUtils.findMethod(chain.getThisObject().getClass(), "b1");
-                        if (b1 != null) {
-                            b1.invoke(chain.getThisObject());
-                            Log.i(TAG, "Splash fragment fast exit b1() invoked");
-                        }
-                    }
-                } catch (Throwable t) {
-                    Log.w(TAG, "splash fragment onViewCreated error: " + t);
+            ReflectUtils.hookAllMethods(xposed, fragCls, cl, "onCreateView", chain -> {
+                Object obj = chain.getThisObject();
+                Context ctx = getContext(obj);
+                if (PureSettings.getBoolean(ctx, PureSettings.KEY_SKIP_SPLASH, true)) {
+                    return null;
                 }
-                return res;
+                return chain.proceed();
+            });
+            ReflectUtils.hookAllMethods(xposed, fragCls, cl, "onViewCreated", chain -> {
+                Object obj = chain.getThisObject();
+                Context ctx = getContext(obj);
+                if (PureSettings.getBoolean(ctx, PureSettings.KEY_SKIP_SPLASH, true)) {
+                    return null;
+                }
+                return chain.proceed();
+            });
+            ReflectUtils.hookAllMethods(xposed, fragCls, cl, "showSplashAd", chain -> {
+                Object obj = chain.getThisObject();
+                Context ctx = getContext(obj);
+                if (PureSettings.getBoolean(ctx, PureSettings.KEY_SKIP_SPLASH, true)) {
+                    return null;
+                }
+                return chain.proceed();
             });
         }
-    }
-
-    private static void hookByteDanceAndTencentAds(XposedInterface xposed, ClassLoader cl) {
-        // 1. Block ByteDance CSJ splash ad loading
-        ReflectUtils.hookAllMethods(xposed, "com.bytedance.sdk.openadsdk.TTAdNative", cl, "loadSplashAd", chain -> {
-            Log.i(TAG, "Blocked TTAdNative.loadSplashAd");
-            return null;
-        });
-
-        // 2. Block ByteDance TTDelegateActivity (splash ad delegate activity)
-        String ttDelegate = "com.bytedance.sdk.openadsdk.core.activity.base.TTDelegateActivity";
-        ReflectUtils.hookMethod(xposed, ttDelegate, cl, "onCreate", new Class<?>[]{Bundle.class}, chain -> {
-            try {
-                Activity act = (Activity) chain.getThisObject();
-                act.finish();
-                Log.i(TAG, "TTDelegateActivity finished immediately");
-                return null;
-            } catch (Throwable ignored) {
-            }
-            return chain.proceed();
-        });
-
-        // 3. Block Tencent GDT splash ads
-        String gdtSplash = "com.qq.e.ads.splash.SplashAD";
-        ReflectUtils.hookAllMethods(xposed, gdtSplash, cl, "fetchAndShowIn", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, gdtSplash, cl, "fetchFullScreenAndShowIn", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, gdtSplash, cl, "showAd", chain -> null);
-
-        Log.i(TAG, "ByteDance and Tencent ad hooks installed");
     }
 
     private static void hookAdDurationAndTimeouts(XposedInterface xposed, ClassLoader cl) {
@@ -279,10 +511,22 @@ public final class DoubanAdPurifier {
             }
             return chain.proceed();
         });
+
+        ReflectUtils.hookAllMethods(xposed, "com.douban.ad.widget.CountDownView", cl, "setDuration", chain -> {
+            return chain.proceed(new Object[]{0});
+        });
+        ReflectUtils.hookAllMethods(xposed, "com.douban.ad.widget.CountDownView", cl, "startCountDown", chain -> null);
+
+        Log.i(TAG, "Ad duration and countdown hooks installed");
     }
 
     private static void hookBetaUpdateAndRating(XposedInterface xposed, ClassLoader cl) {
-        // 1. Block Beta APK Dialog Activity
+        // 1. Beta APK Check & Dialog
+        String betaCheck = "com.douban.frodo.update.BetaApkChecker";
+        ReflectUtils.hookAllMethods(xposed, betaCheck, cl, "check", chain -> null);
+        ReflectUtils.hookAllMethods(xposed, betaCheck, cl, "checkUpdate", chain -> null);
+        ReflectUtils.hookAllMethods(xposed, betaCheck, cl, "showBetaApkDialog", chain -> null);
+
         String betaDialog = "com.douban.frodo.activity.BetaApkDialogActivity";
         ReflectUtils.hookMethod(xposed, betaDialog, cl, "onCreate", new Class<?>[]{Bundle.class}, chain -> {
             try {
@@ -297,7 +541,7 @@ public final class DoubanAdPurifier {
             return chain.proceed();
         });
 
-        // 2. Block Beta APK Install Activity
+        // 2. Beta APK Install Activity
         String betaInstall = "com.douban.frodo.activity.BetaApkInstallActivity";
         ReflectUtils.hookMethod(xposed, betaInstall, cl, "onCreate", new Class<?>[]{Bundle.class}, chain -> {
             try {
@@ -312,21 +556,13 @@ public final class DoubanAdPurifier {
             return chain.proceed();
         });
 
-        // 3. Block Skynet Rating (评价/评分弹窗)
+        // 3. Block Skynet Rating
         String ratingDialog = "com.douban.frodo.skynet.widget.SkynetRatingDialogFragment";
         ReflectUtils.hookAllMethods(xposed, ratingDialog, cl, "show", chain -> {
             Object obj = chain.getThisObject();
             Context ctx = getContext(obj);
             if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_RATING_DIALOG, true)) {
                 Log.i(TAG, "Blocked SkynetRatingDialogFragment.show");
-                return null;
-            }
-            return chain.proceed();
-        });
-        ReflectUtils.hookAllMethods(xposed, ratingDialog, cl, "onCreateDialog", chain -> {
-            Object obj = chain.getThisObject();
-            Context ctx = getContext(obj);
-            if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_RATING_DIALOG, true)) {
                 return null;
             }
             return chain.proceed();
@@ -425,4 +661,3 @@ public final class DoubanAdPurifier {
         return null;
     }
 }
-
