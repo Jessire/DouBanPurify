@@ -19,6 +19,6 @@ class ExampleInstrumentedTest {
     fun useAppContext() {
         // Context of the app under test.
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals("com.douban.pure", appContext.packageName)
+        assertEquals("io.github.jessire.doubanpurify", appContext.packageName)
     }
 }

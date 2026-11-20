@@ -48,6 +48,10 @@ public final class InAppSettingsDialog {
             return;
         }
 
+        buildDialog(activity, onDismissListener).show();
+    }
+
+    static Dialog buildDialog(Activity activity, Runnable onDismissListener) {
         boolean isDark = isDarkMode(activity);
         int bgColor = isDark ? Color.parseColor("#1C1C1E") : Color.parseColor("#FFFFFF");
         int cardBgColor = isDark ? Color.parseColor("#2C2C2E") : Color.parseColor("#F6F7F9");
@@ -110,7 +114,7 @@ public final class InAppSettingsDialog {
         header.addView(titleCol);
 
         TextView badge = new TextView(activity);
-        badge.setText(" v1.3 ");
+        badge.setText(" v1.4.13 ");
         badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         badge.setTextColor(DOUBAN_GREEN);
         badge.setTypeface(Typeface.DEFAULT_BOLD);
@@ -120,21 +124,26 @@ public final class InAppSettingsDialog {
 
         root.addView(header);
 
-        // Segmented Tab Bar (Horizontal Scroll)
-        HorizontalScrollView tabScroll = new HorizontalScrollView(activity);
-        tabScroll.setHorizontalScrollBarEnabled(false);
-        tabScroll.setPadding(0, 0, 0, dp2px(activity, 12));
-
+        // Segmented Tab Bar（短标题等比等宽，避免长文案被裁切）
         LinearLayout tabLayout = new LinearLayout(activity);
         tabLayout.setOrientation(LinearLayout.HORIZONTAL);
+        tabLayout.setPadding(0, 0, 0, dp2px(activity, 12));
 
-        String[] tabNames = new String[]{"🚀 核心与广告", "📱 页面精简", "🔍 搜索与侧栏", "ℹ️ 关于"};
+        String[] tabNames = new String[]{"🚀 广告", "📱 页面", "🔍 搜索", "📚 侧栏", "ℹ️ 关于"};
         List<TextView> tabViews = new ArrayList<>();
         List<View> pageViews = new ArrayList<>();
 
-        ScrollView contentScrollView = new ScrollView(activity);
+        // 内容区自适应高度：内容短时收缩，内容长时在 60% 屏高内滚动
+        final int maxContentHeight = (int) (activity.getResources().getDisplayMetrics().heightPixels * 0.60f);
+        ScrollView contentScrollView = new ScrollView(activity) {
+            @Override
+            protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+                super.onMeasure(widthMeasureSpec,
+                        View.MeasureSpec.makeMeasureSpec(maxContentHeight, View.MeasureSpec.AT_MOST));
+            }
+        };
         LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         contentScrollView.setLayoutParams(scrollParams);
         contentScrollView.setVerticalScrollBarEnabled(false);
 
@@ -172,9 +181,15 @@ public final class InAppSettingsDialog {
         page2.setOrientation(LinearLayout.VERTICAL);
 
         LinearLayout card2_1 = createCard(activity, cardBgColor);
-        addSectionHeader(card2_1, "底栏精简 (自动等宽)", activity);
-        addSwitchRow(card2_1, activity, "底栏仅保留首页和我", "隐藏中间书影音、小组、市集，自动均分底栏",
+        addSectionHeader(card2_1, "底栏 Tab 精简 (逐项控制 · 自动等宽)", activity);
+        addSwitchRow(card2_1, activity, "隐藏「书影音」Tab", "仅隐藏书影音入口，其余 Tab 自动均分剩余宽度",
                 PureSettings.KEY_HIDE_TAB_SUBJECT, true, primaryText, subText);
+        addDivider(card2_1, activity, isDark);
+        addSwitchRow(card2_1, activity, "隐藏「小组」Tab", "仅隐藏小组入口，其余 Tab 自动均分剩余宽度",
+                PureSettings.KEY_HIDE_TAB_GROUP, true, primaryText, subText);
+        addDivider(card2_1, activity, isDark);
+        addSwitchRow(card2_1, activity, "隐藏「市集」Tab", "仅隐藏市集入口，其余 Tab 自动均分剩余宽度",
+                PureSettings.KEY_HIDE_TAB_SHIJI, true, primaryText, subText);
         page2.addView(card2_1);
 
         LinearLayout card2_2 = createCard(activity, cardBgColor);
@@ -193,43 +208,63 @@ public final class InAppSettingsDialog {
         page2.addView(card2_2);
         pageViews.add(page2);
 
-        // === TAB 3: 搜索与侧栏 ===
+        // === TAB 3: 搜索页 ===
         LinearLayout page3 = new LinearLayout(activity);
         page3.setOrientation(LinearLayout.VERTICAL);
 
         LinearLayout card3_1 = createCard(activity, cardBgColor);
         addSectionHeader(card3_1, "搜索页净化", activity);
-        addSwitchRow(card3_1, activity, "搜索页屏蔽热门话题", "保留上方轮播推荐，彻底屏蔽下方热门话题排行榜",
+        addSwitchRow(card3_1, activity, "搜索页屏蔽热门话题", "隐藏热门话题标题与列表，不控制上方轮播区",
                 PureSettings.KEY_HIDE_SEARCH_HOT_TOPICS, true, primaryText, subText);
+        addDivider(card3_1, activity, isDark);
+        addSwitchRow(card3_1, activity, "搜索页屏蔽实时热门榜", "隐藏「实时热门书影音 / 讨论」轮播区，默认关闭",
+                PureSettings.KEY_HIDE_SEARCH_TRENDS, false, primaryText, subText);
+        addDivider(card3_1, activity, isDark);
+        addSwitchRow(card3_1, activity, "用电影榜和电视榜替换讨论榜", "关闭后保留原生讨论榜和书影音前十；屏蔽实时热门榜时不显示整个榜单区",
+                PureSettings.KEY_REPLACE_SEARCH_BOARDS, PureSettings.DEFAULT_REPLACE_SEARCH_BOARDS, primaryText, subText);
         page3.addView(card3_1);
+        pageViews.add(page3);
+
+        // === TAB 4: 侧边栏抽屉 ===
+        LinearLayout page4 = new LinearLayout(activity);
+        page4.setOrientation(LinearLayout.VERTICAL);
 
         LinearLayout card3_2 = createCard(activity, cardBgColor);
         addSectionHeader(card3_2, "侧边栏抽屉精简", activity);
         addSwitchRow(card3_2, activity, "侧边栏隐藏未成年人模式", "彻底从抽屉列表中移除未成年人模式入口",
                 PureSettings.KEY_HIDE_SIDE_MINOR, true, primaryText, subText);
         addDivider(card3_2, activity, isDark);
-        addSwitchRow(card3_2, activity, "侧边栏隐藏背包与草稿箱", "移除草稿箱、我的背包、签到足迹等项目",
+        addSwitchRow(card3_2, activity, "侧边栏隐藏我的背包", "移除我的背包入口",
                 PureSettings.KEY_HIDE_SIDE_BAG, true, primaryText, subText);
         addDivider(card3_2, activity, isDark);
-        addSwitchRow(card3_2, activity, "侧边栏隐藏反馈与管理中心", "移除帮助与反馈、社区管理中心等条目",
+        addSwitchRow(card3_2, activity, "侧边栏隐藏草稿箱", "移除草稿箱入口",
+                PureSettings.KEY_HIDE_SIDE_DRAFTS, true, primaryText, subText);
+        addDivider(card3_2, activity, isDark);
+        addSwitchRow(card3_2, activity, "侧边栏隐藏签到", "移除签到入口",
+                PureSettings.KEY_HIDE_SIDE_CHECKIN, true, primaryText, subText);
+        addDivider(card3_2, activity, isDark);
+        addSwitchRow(card3_2, activity, "侧边栏隐藏帮助与反馈", "移除帮助与反馈入口",
+                PureSettings.KEY_HIDE_SIDE_FEEDBACK, true, primaryText, subText);
+        addDivider(card3_2, activity, isDark);
+        addSwitchRow(card3_2, activity, "侧边栏隐藏社区管理中心", "移除社区管理中心入口",
                 PureSettings.KEY_HIDE_SIDE_COMMUNITY, true, primaryText, subText);
         addDivider(card3_2, activity, isDark);
         addSwitchRow(card3_2, activity, "侧边栏隐藏底部服务网格", "移除我的订单、钱包、礼券等电商金融格子",
                 PureSettings.KEY_HIDE_SIDE_SERVICES, true, primaryText, subText);
-        page3.addView(card3_2);
-        pageViews.add(page3);
+        page4.addView(card3_2);
+        pageViews.add(page4);
 
-        // === TAB 4: 关于模块 ===
-        LinearLayout page4 = new LinearLayout(activity);
-        page4.setOrientation(LinearLayout.VERTICAL);
+        // === TAB 5: 关于模块 ===
+        LinearLayout page5 = new LinearLayout(activity);
+        page5.setOrientation(LinearLayout.VERTICAL);
 
         LinearLayout card4_1 = createCard(activity, cardBgColor);
         addSectionHeader(card4_1, "模块信息", activity);
         addInfoRow(card4_1, "模块名称", "DouBanPurify", primaryText, subText, activity);
         addDivider(card4_1, activity, isDark);
-        addInfoRow(card4_1, "模块版本", "v1.3", primaryText, subText, activity);
+        addInfoRow(card4_1, "模块版本", "v1.4.13", primaryText, subText, activity);
         addDivider(card4_1, activity, isDark);
-        addInfoRow(card4_1, "适配目标", "豆瓣 Frodo (7.134.0)", primaryText, subText, activity);
+        addInfoRow(card4_1, "适配目标", "豆瓣 Frodo (7.138.0)", primaryText, subText, activity);
         addDivider(card4_1, activity, isDark);
 
         LinearLayout ghRow = addInfoRow(card4_1, "GitHub 仓库", "Jessire / DouBanPurify", DOUBAN_GREEN, subText, activity);
@@ -245,62 +280,48 @@ public final class InAppSettingsDialog {
                 }
             }
         });
-        page4.addView(card4_1);
-        pageViews.add(page4);
+        page5.addView(card4_1);
+        pageViews.add(page5);
 
         // Build Tabs & Tab Click
         for (int i = 0; i < tabNames.length; i++) {
             final int index = i;
             TextView tab = new TextView(activity);
             tab.setText(tabNames[i]);
-            tab.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            tab.setPadding(dp2px(activity, 14), dp2px(activity, 7), dp2px(activity, 14), dp2px(activity, 7));
+            tab.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            tab.setGravity(Gravity.CENTER);
+            tab.setSingleLine(true);
+            tab.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            tab.setPadding(dp2px(activity, 3), dp2px(activity, 7), dp2px(activity, 3), dp2px(activity, 7));
             LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            tLp.setMargins(0, 0, dp2px(activity, 8), 0);
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+            tLp.setMargins(dp2px(activity, 2), 0, dp2px(activity, 2), 0);
             tab.setLayoutParams(tLp);
 
-            tab.setOnClickListener(v -> {
-                for (int j = 0; j < tabViews.size(); j++) {
-                    boolean active = (j == index);
-                    TextView tv = tabViews.get(j);
-                    tv.setBackground(createRoundedDrawable(
-                            active ? DOUBAN_GREEN : tabInactiveBg, dp2px(activity, 16)));
-                    tv.setTextColor(active ? Color.WHITE : tabInactiveText);
-                    tv.setTypeface(active ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-                    pageViews.get(j).setVisibility(active ? View.VISIBLE : View.GONE);
-                }
-            });
+            tab.setOnClickListener(v ->
+                    applyTabState(tabViews, pageViews, index, activity, tabInactiveBg, tabInactiveText, true));
 
             tabViews.add(tab);
             tabLayout.addView(tab);
 
-            pageViews.get(i).setVisibility(i == 0 ? View.VISIBLE : View.GONE);
             contentContainer.addView(pageViews.get(i));
         }
 
-        // Set initial tab active state
-        TextView firstTab = tabViews.get(0);
-        firstTab.setBackground(createRoundedDrawable(DOUBAN_GREEN, dp2px(activity, 16)));
-        firstTab.setTextColor(Color.WHITE);
-        firstTab.setTypeface(Typeface.DEFAULT_BOLD);
-
-        for (int i = 1; i < tabViews.size(); i++) {
-            TextView otherTab = tabViews.get(i);
-            otherTab.setBackground(createRoundedDrawable(tabInactiveBg, dp2px(activity, 16)));
-            otherTab.setTextColor(tabInactiveText);
-            otherTab.setTypeface(Typeface.DEFAULT);
+        // Restore last opened tab（默认回到第一个页签）
+        int initialTab = PureSettings.getInt(activity, PureSettings.KEY_UI_LAST_TAB, 0);
+        if (initialTab < 0 || initialTab >= pageViews.size()) {
+            initialTab = 0;
         }
+        applyTabState(tabViews, pageViews, initialTab, activity, tabInactiveBg, tabInactiveText, false);
 
-        tabScroll.addView(tabLayout);
-        root.addView(tabScroll);
+        root.addView(tabLayout);
 
         contentScrollView.addView(contentContainer);
         root.addView(contentScrollView);
 
         // Bottom Action Button
         Button btnConfirm = new Button(activity);
-        btnConfirm.setText("完成并保存");
+        btnConfirm.setText("完成");
         btnConfirm.setTextColor(Color.WHITE);
         btnConfirm.setTypeface(Typeface.DEFAULT_BOLD);
         btnConfirm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
@@ -315,7 +336,6 @@ public final class InAppSettingsDialog {
                 DoubanLayoutPurifier.purgeViews(activity.getWindow().getDecorView());
             } catch (Throwable ignored) {
             }
-            Toast.makeText(activity, "设置已保存并即时生效", Toast.LENGTH_SHORT).show();
         });
         root.addView(btnConfirm);
 
@@ -330,10 +350,28 @@ public final class InAppSettingsDialog {
         if (window != null) {
             window.setBackgroundDrawableResource(android.R.color.transparent);
             int screenWidth = activity.getResources().getDisplayMetrics().widthPixels;
-            int screenHeight = activity.getResources().getDisplayMetrics().heightPixels;
-            window.setLayout((int) (screenWidth * 0.90f), (int) (screenHeight * 0.76f));
+            // 高度交给内容自适应：短页签不留大块空白，长页签在 60% 屏高内滚动
+            window.setLayout((int) (screenWidth * 0.90f), ViewGroup.LayoutParams.WRAP_CONTENT);
         }
-        dialog.show();
+        return dialog;
+    }
+
+    private static void applyTabState(List<TextView> tabViews, List<View> pageViews, int index,
+                                      Context context, int inactiveBg, int inactiveText,
+                                      boolean remember) {
+        for (int j = 0; j < tabViews.size(); j++) {
+            boolean active = (j == index);
+            TextView tv = tabViews.get(j);
+            tv.setBackground(createRoundedDrawable(active ? DOUBAN_GREEN : inactiveBg, dp2px(context, 16)));
+            tv.setTextColor(active ? Color.WHITE : inactiveText);
+            tv.setTypeface(active ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            if (j < pageViews.size()) {
+                pageViews.get(j).setVisibility(active ? View.VISIBLE : View.GONE);
+            }
+        }
+        if (remember) {
+            PureSettings.setInt(context, PureSettings.KEY_UI_LAST_TAB, index);
+        }
     }
 
     private static LinearLayout createCard(Context context, int bgColor) {

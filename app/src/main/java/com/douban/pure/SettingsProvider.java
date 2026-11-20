@@ -25,6 +25,7 @@ public class SettingsProvider extends ContentProvider {
         Bundle res = new Bundle();
 
         if ("get_boolean".equals(method) && arg != null) {
+            if (!sp.contains(arg)) return res; // Missing is not a stored default.
             boolean def = extras != null && extras.getBoolean("def", true);
             res.putBoolean("value", sp.getBoolean(arg, def));
             return res;

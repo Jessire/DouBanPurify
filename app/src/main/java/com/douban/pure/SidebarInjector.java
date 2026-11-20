@@ -14,6 +14,11 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.lang.reflect.Method;
+import java.util.List;
+
+import io.github.libxposed.api.XposedInterface;
+
 public final class SidebarInjector {
     private static final String TAG = "DoubanPure";
     private static final String SIDEBAR_ENTRY_TAG = "douban_pure_sidebar_entry";
@@ -22,76 +27,139 @@ public final class SidebarInjector {
     private SidebarInjector() {
     }
 
-    public static void inject(View root) {
-        if (root == null) return;
-        Context ctx = root.getContext();
-        Activity activity = findActivity(ctx);
-        if (activity == null || activity.isFinishing() || activity.isDestroyed()) {
-            return;
-        }
+    private static final String HOST_VIEW = "com.douban.frodo.view.";
+    private static final String MENU = HOST_VIEW + "SlideMenuView";
+    private static final String LIST = HOST_VIEW + "SlideMenuListEntriesView";
+    private static final String ROW = HOST_VIEW + "SlideMenuListEntryView";
 
-        try {
-            ViewGroup listEntries = findListEntriesView(root);
-            if (listEntries == null) {
-                return;
+    static void install(XposedInterface xposed, ClassLoader cl) {
+        after(xposed, ReflectUtils.findClass(MENU, cl), "onAttachedToWindow",
+                v -> DoubanLayoutPurifier.purgeDrawerViews(v));
+        Class<?> list = ReflectUtils.findClass(LIST, cl);
+        if (list != null) try {
+            Method bind = list.getDeclaredMethod("setData", List.class);
+            if (bind.getReturnType() == void.class && ViewGroup.class.isAssignableFrom(list)) {
+                xposed.deoptimize(bind); // Native list bind invokes the row setter in a loop.
+                xposed.hook(bind).intercept(chain -> {
+                    ViewGroup entries = (ViewGroup) chain.getThisObject();
+                    if (menuRoot(entries) == null) return chain.proceed();
+                    // Native setData calls removeAllViews. Keep our row alive across that call,
+                    // but leave native binding/child order/handles completely untouched.
+                    View existing = findEntry(entries);
+                    Object result = chain.proceed();
+                    afterListBound(entries, existing);
+                    return result;
+                });
+                Log.i(TAG, "sidebar native list bind hook registered");
             }
-
-            if (listEntries.findViewWithTag(SIDEBAR_ENTRY_TAG) != null) {
-                return;
-            }
-
-            View entry = createSidebarEntryView(activity);
-            entry.setTag(SIDEBAR_ENTRY_TAG);
-
-            int targetIndex = -1;
-            int count = listEntries.getChildCount();
-            for (int i = 0; i < count; i++) {
-                View child = listEntries.getChildAt(i);
-                if (containsText(child, "设置")) {
-                    targetIndex = i + 1;
-                    break;
-                }
-            }
-
-            if (targetIndex >= 0 && targetIndex <= listEntries.getChildCount()) {
-                listEntries.addView(entry, targetIndex);
-            } else {
-                listEntries.addView(entry);
-            }
-
-            Log.i(TAG, "Sidebar entry injected successfully");
         } catch (Throwable t) {
-            Log.w(TAG, "inject failed: " + t);
+            Log.w(TAG, "sidebar list binding hook unavailable", t);
+        }
+        Class<?> rowModel = ReflectUtils.findClass(ROW + "$b", cl);
+        if (rowModel != null) after(xposed, ReflectUtils.findClass(ROW, cl), "setData", v -> {
+            if (v instanceof ViewGroup) DoubanLayoutPurifier.onSidebarRowBound((ViewGroup) v);
+        }, rowModel);
+    }
+
+    private interface After { void run(View view); }
+
+    private static void after(XposedInterface xposed, Class<?> owner, String name, After action,
+                              Class<?>... arguments) {
+        if (owner == null || !View.class.isAssignableFrom(owner)) return;
+        try {
+            Method method = owner.getDeclaredMethod(name, arguments);
+            if (method.getReturnType() != void.class) return;
+            xposed.hook(method).intercept(chain -> {
+                Object result = chain.proceed();
+                try { action.run((View) chain.getThisObject()); }
+                catch (RuntimeException e) { Log.w(TAG, "sidebar callback failed: " + name, e); }
+                return result;
+            });
+            Log.i(TAG, "sidebar native hook registered: " + owner.getSimpleName() + "." + name);
+        } catch (Throwable t) {
+            Log.w(TAG, "sidebar hook unavailable: " + name, t);
         }
     }
 
-    private static ViewGroup findListEntriesView(View view) {
-        if (view == null) return null;
-        String name = view.getClass().getName();
-        if (name.contains("SlideMenuListEntriesView")) {
-            return (ViewGroup) view;
-        }
+    static boolean isMenuRoot(View view) { return MENU.equals(view.getClass().getName()); }
+    static boolean isRow(View view) { return "SlideMenuListEntryView".equals(view.getClass().getSimpleName()); }
 
-        if (view instanceof ViewGroup) {
-            ViewGroup vg = (ViewGroup) view;
-            int count = vg.getChildCount();
-            for (int i = 0; i < count; i++) {
-                ViewGroup res = findListEntriesView(vg.getChildAt(i));
-                if (res != null) return res;
-            }
+    static View menuRoot(View view) {
+        for (View v = view; v != null; v = v.getParent() instanceof View ? (View) v.getParent() : null) {
+            if (isMenuRoot(v)) return v;
         }
         return null;
     }
 
-    private static boolean containsText(View view, String text) {
-        if (view instanceof TextView) {
-            CharSequence cs = ((TextView) view).getText();
-            if (cs != null && cs.toString().contains(text)) return true;
+    static View findEntry(ViewGroup list) {
+        for (int i = 0; i < list.getChildCount(); i++) {
+            View child = list.getChildAt(i);
+            if (SIDEBAR_ENTRY_TAG.equals(child.getTag())) return child;
         }
+        return null;
+    }
+
+    static void afterListBound(ViewGroup list, View oldEntry) {
+        try {
+            // All native rows are now labeled and are parents' children, but not measured yet.
+            DoubanLayoutPurifier.purgeSidebarTree(list, 0);
+            reconcileEntry(list, oldEntry);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "sidebar list reconciliation failed", e);
+        }
+    }
+
+    public static void inject(View root) {
+        if (root == null) return;
+        ViewGroup list = findListEntriesView(root);
+        if (list == null) return;
+        try { reconcileEntry(list, null); }
+        catch (RuntimeException e) { Log.w(TAG, "sidebar entry injection failed", e); }
+    }
+
+    private static void reconcileEntry(ViewGroup list, View oldEntry) {
+        int count = list.getChildCount();
+        if (count == 0) return; // Waiting for the host's initial list bind.
+        View entry = findEntry(list);
+        int current = entry == null ? -1 : list.indexOfChild(entry);
+        int target = count - (current >= 0 ? 1 : 0); // Append if the host has no Settings row.
+        for (int i = 0; i < count; i++) {
+            View child = list.getChildAt(i);
+            if (isRow(child) && containsSettingsTitle(child)) {
+                target = i + 1 - (current >= 0 && current < i ? 1 : 0);
+                break;
+            }
+        }
+        if (current == target) return;
+        if (entry == null) {
+            if (oldEntry != null && oldEntry.getParent() == null) entry = oldEntry;
+            else {
+                Activity activity = findActivity(list.getContext());
+                if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+                entry = createSidebarEntryView(activity);
+                entry.setTag(SIDEBAR_ENTRY_TAG);
+            }
+        } else list.removeViewAt(current); // Only if the anchor actually moved.
+        list.addView(entry, target);
+    }
+
+    private static ViewGroup findListEntriesView(View view) {
+        if (!(view instanceof ViewGroup)) return null;
+        ViewGroup group = (ViewGroup) view;
+        if (LIST.equals(view.getClass().getName()) && menuRoot(group) != null) return group;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            ViewGroup found = findListEntriesView(group.getChildAt(i));
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static boolean containsSettingsTitle(View view) {
+        if (view instanceof TextView) return "设置".contentEquals(((TextView) view).getText());
         if (view instanceof ViewGroup) {
-            ViewGroup vg = (ViewGroup) view;
-            for (int i = 0; i < vg.getChildCount(); i++) {
-                if (containsText(vg.getChildAt(i), text)) return true;
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                if (containsSettingsTitle(group.getChildAt(i))) return true;
             }
         }
         return false;

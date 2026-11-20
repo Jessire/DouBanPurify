@@ -10,6 +10,22 @@ public final class PureSettings {
     public static final String PREF_NAME = "douban_pure_settings";
     public static final String ACTION_SETTINGS_CHANGED = "com.douban.pure.ACTION_SETTINGS_CHANGED";
 
+    // 界面状态（仅本进程使用，不参与净化开关）
+    public static final String KEY_UI_LAST_TAB = "ui_last_tab";
+
+    // 宿主进程内的 Application Context 兜底：没有 View/Activity 上下文的 Hook 也能读到真实开关值
+    private static volatile Context sFallbackContext = null;
+
+    public static void setFallbackContext(Context context) {
+        if (context == null) return;
+        try {
+            Context app = context.getApplicationContext();
+            sFallbackContext = app != null ? app : context;
+        } catch (Throwable ignored) {
+            sFallbackContext = context;
+        }
+    }
+
     // 广告与秒开
     public static final String KEY_SKIP_SPLASH = "skip_splash";
     public static final String KEY_BLOCK_FEED_AD = "block_feed_ad";
@@ -31,6 +47,8 @@ public final class PureSettings {
     // 搜索页
     public static final String KEY_HIDE_SEARCH_HOT_TOPICS = "hide_search_hot_topics";
     public static final String KEY_HIDE_SEARCH_TRENDS = "hide_search_trends";
+    public static final String KEY_REPLACE_SEARCH_BOARDS = "replace_search_boards";
+    public static final boolean DEFAULT_REPLACE_SEARCH_BOARDS = true;
 
     // 侧边栏
     public static final String KEY_HIDE_SIDE_BAG = "hide_side_bag";
@@ -48,19 +66,17 @@ public final class PureSettings {
     private PureSettings() {
     }
 
+    /** 整榜隐藏优先；此判定只控制侧卡替换，不控制原生书影音榜的前十条。 */
+    public static boolean shouldReplaceSearchBoards(Context context) {
+        return !getBoolean(context, KEY_HIDE_SEARCH_TRENDS, false)
+                && getBoolean(context, KEY_REPLACE_SEARCH_BOARDS, DEFAULT_REPLACE_SEARCH_BOARDS);
+    }
+
     public static boolean getBoolean(Context context, String key, boolean defValue) {
+        if (context == null) context = sFallbackContext;
         if (context == null) return defValue;
 
-        // 1. Try remotePreferences from LibXposed module
-        try {
-            SharedPreferences remote = DoubanPureHook.remotePreferences();
-            if (remote != null && remote.contains(key)) {
-                return remote.getBoolean(key, defValue);
-            }
-        } catch (Throwable ignored) {
-        }
-
-        // 2. Try Provider cross-process lookup
+        // Prefer the shared store that setBoolean actually updates.
         try {
             Bundle extras = new Bundle();
             extras.putBoolean("def", defValue);
@@ -72,12 +88,19 @@ public final class PureSettings {
         } catch (Throwable ignored) {
         }
 
-        // 3. Fallback to local SharedPreferences
         try {
-            return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).getBoolean(key, defValue);
+            SharedPreferences local = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+            if (local.contains(key)) return local.getBoolean(key, defValue);
         } catch (Throwable ignored) {
-            return defValue;
         }
+
+        // Legacy fallback only: dialog writes never update remotePreferences.
+        try {
+            SharedPreferences remote = DoubanPureHook.remotePreferences();
+            if (remote != null) return remote.getBoolean(key, defValue);
+        } catch (Throwable ignored) {
+        }
+        return defValue;
     }
 
     public static void setBoolean(Context context, String key, boolean value) {
@@ -106,6 +129,28 @@ public final class PureSettings {
             intent.putExtra("value", value);
             intent.setPackage("com.douban.frodo");
             context.sendBroadcast(intent);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 仅供界面使用：读取上次停留的设置页签，不写入模块 Provider。 */
+    public static int getInt(Context context, String key, int defValue) {
+        if (context == null) context = sFallbackContext;
+        if (context == null) return defValue;
+        try {
+            return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).getInt(key, defValue);
+        } catch (Throwable ignored) {
+            return defValue;
+        }
+    }
+
+    /** 仅供界面使用：保存当前设置页签。 */
+    public static void setInt(Context context, String key, int value) {
+        if (context == null) context = sFallbackContext;
+        if (context == null) return;
+        try {
+            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                    .edit().putInt(key, value).apply();
         } catch (Throwable ignored) {
         }
     }

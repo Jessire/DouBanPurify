@@ -65,6 +65,7 @@ public final class DoubanPureHook extends XposedModule {
                     Object res = chain.proceed();
                     Object app = chain.getThisObject();
                     if (app instanceof Application) {
+                        PureSettings.setFallbackContext((Application) app);
                         tryInstallRealHooks(xposed, ((Application) app).getClassLoader());
                     }
                     return res;
@@ -80,10 +81,11 @@ public final class DoubanPureHook extends XposedModule {
                 if (target instanceof Activity) {
                     Activity act = (Activity) target;
                     String actName = act.getClass().getName();
+                    PureSettings.setFallbackContext(act);
 
                     // Check if skip_splash is enabled
                     boolean skipSplash = PureSettings.getBoolean(act, PureSettings.KEY_SKIP_SPLASH, true);
-                    if (skipSplash && actName.contains("SplashActivity")) {
+                    if (skipSplash && "com.douban.frodo.activity.SplashActivity".equals(actName)) {
                         Intent intent = act.getIntent();
                         if (intent == null) {
                             intent = new Intent();
@@ -96,6 +98,10 @@ public final class DoubanPureHook extends XposedModule {
 
                     // Install hooks on decrypted ClassLoader as soon as real Activity ClassLoader is available
                     tryInstallRealHooks(xposed, act.getClassLoader());
+                    // Start disk warmup while the native home is still being created.
+                    if ("com.douban.frodo.activity.SplashActivity".equals(actName)) {
+                        SearchNativeBoards.prefetch(act);
+                    }
 
                     // Register settings changed listener
                     registerReceiverIfNeeded(act);
@@ -110,7 +116,10 @@ public final class DoubanPureHook extends XposedModule {
                 try {
                     Object target = chain.getThisObject();
                     if (target instanceof Activity) {
+                        if (finishHotSplashIfEnabled((Activity) target)) return result;
+                        SearchNativeBoards.onForeground((Activity) target);
                         DoubanLayoutPurifier.onActivityResumed((Activity) target);
+                        DoubanAdPurifier.maybeRecoverBlankHome((Activity) target);
                     }
                 } catch (Throwable t) {
                     Log.w(TAG, "onResume hook error: " + t);
@@ -122,6 +131,13 @@ public final class DoubanPureHook extends XposedModule {
         } catch (Throwable t) {
             Log.e(TAG, "installBaseHooks failed: " + t);
         }
+    }
+
+    static boolean finishHotSplashIfEnabled(Activity activity) {
+        if (!"com.douban.frodo.splash.SplashActivityHot".equals(activity.getClass().getName())
+                || !PureSettings.getBoolean(activity, PureSettings.KEY_SKIP_SPLASH, true)) return false;
+        if (!activity.isFinishing() && !activity.isDestroyed()) activity.finish();
+        return true;
     }
 
     static void tryInstallRealHooks(XposedInterface xposed, ClassLoader cl) {
@@ -155,6 +171,7 @@ public final class DoubanPureHook extends XposedModule {
                 public void onReceive(Context context, Intent intent) {
                     Log.i(TAG, "Settings change broadcast received, refreshing views");
                     try {
+                        SearchNativeBoards.onSettingsChanged(context, intent);
                         DoubanLayoutPurifier.purgeViews(act.getWindow().getDecorView());
                     } catch (Throwable ignored) {
                     }

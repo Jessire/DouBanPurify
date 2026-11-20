@@ -7,7 +7,9 @@ import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewParent;
+import android.view.Gravity;
+
+import java.util.WeakHashMap;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -30,6 +32,10 @@ public final class DoubanLayoutPurifier {
         hookViewPager(xposed, cl);
         hookHackViewPagerSwiping(xposed, cl);
         hookTargetViewVisibility(xposed);
+        SearchLanding.observeInflation(xposed, cl);
+        SearchRankLimit.install(xposed, cl);
+        SearchNativeBoards.install(xposed, cl);
+        SidebarInjector.install(xposed, cl);
     }
 
     private static void preventTabStripInfiniteLoop(XposedInterface xposed, ClassLoader cl) {
@@ -54,6 +60,12 @@ public final class DoubanLayoutPurifier {
             Object strip = chain.getThisObject();
             if (!(strip instanceof ViewGroup) || !isHomeStrip((ViewGroup) strip)) {
                 return chain.proceed();
+            }
+            if (isHomeBottomStrip((ViewGroup) strip) && chain.getExecutable() instanceof Method
+                    && ((Method) chain.getExecutable()).getReturnType() == void.class
+                    && ((Method) chain.getExecutable()).getParameterTypes().length == 0) {
+                purgeStrip((ViewGroup) strip);
+                return null;
             }
             try {
                 Object sObj = ReflectUtils.getField(strip, "S");
@@ -115,20 +127,25 @@ public final class DoubanLayoutPurifier {
             Method setVisibility = View.class.getDeclaredMethod("setVisibility", int.class);
             xposed.hook(setVisibility).intercept(chain -> {
                 View view = (View) chain.getThisObject();
-                int id = view.getId();
+                String entryName = entryName(view);
+                int requested = (Integer) chain.getArg(0);
+                int sidebar = sidebarHostVisibility(view, entryName, requested);
+                if (sidebar != requested) return chain.proceed(new Object[]{sidebar});
+                if (("vpSubject".equals(entryName) || "pageIndicatorView".equals(entryName)) && SearchLanding.inLanding(view))
+                    return chain.proceed(new Object[]{SearchLanding.onVisibility(view, (Integer) chain.getArgs().get(0), PureSettings.getBoolean(view.getContext(), PureSettings.KEY_HIDE_SEARCH_TRENDS, false))});
                 Context ctx = view.getContext();
 
-                if (id == 0x7f0a07cb || id == 0x7f0a07cc) {
+                if (("gallery_topic_title".equals(entryName) || "gallery_topics".equals(entryName)) && SearchLanding.inLanding(view)) {
                     boolean hideTopics = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SEARCH_HOT_TOPICS, true);
                     if (hideTopics) {
                         return chain.proceed(new Object[]{View.GONE});
                     }
-                } else if (id == 0x7f0a02e1 && isHomeView(view)) {
+                } else if ("btn_post".equals(entryName) && isHomeView(view)) {
                     boolean hidePost = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_HOME_POST_BTN, true);
                     if (hidePost) {
                         return chain.proceed(new Object[]{View.GONE});
                     }
-                } else if (id == 0x7f0a0ead || id == 0x7f0a18ea) {
+                } else if ("notification_container".equals(entryName) || "venue_bg".equals(entryName)) {
                     boolean hideBanner = PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true);
                     if (hideBanner) {
                         ViewGroup.LayoutParams lp = view.getLayoutParams();
@@ -139,12 +156,12 @@ public final class DoubanLayoutPurifier {
                         }
                         return chain.proceed(new Object[]{View.GONE});
                     }
-                } else if (id == 0x7f0a08c6) {
+                } else if ("header_right_banner".equals(entryName)) {
                     boolean hidePets = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_PETS, true);
                     if (hidePets) {
                         return chain.proceed(new Object[]{View.GONE});
                     }
-                } else if (id == 0x7f0a0d6c) {
+                } else if ("menu_podcast".equals(entryName)) {
                     boolean hidePodcast = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_PODCAST, true);
                     if (hidePodcast) {
                         return chain.proceed(new Object[]{View.GONE});
@@ -203,6 +220,13 @@ public final class DoubanLayoutPurifier {
         }
     }
 
+    static String entryName(View view) {
+        int id = view.getId();
+        if (id <= 0 || (id >>> 24) == 0) return "";
+        try { return view.getResources().getResourceEntryName(id); }
+        catch (android.content.res.Resources.NotFoundException ignored) { return ""; }
+    }
+
     private static boolean isHomeView(View view) {
         Context context = view.getContext();
         // Views may use a themed wrapper rather than the Activity directly.
@@ -219,11 +243,11 @@ public final class DoubanLayoutPurifier {
     }
 
     private static boolean isHomeTopStrip(ViewGroup strip) {
-        return isHomeView(strip) && strip.getId() == 0x7f0a14b8;
+        return isHomeView(strip) && "tab_layout".equals(entryName(strip));
     }
 
     private static boolean isHomeBottomStrip(ViewGroup strip) {
-        if (!isHomeView(strip) || strip.getId() != 0x7f0a14bb
+        if (!isHomeView(strip) || !"tab_strip".equals(entryName(strip))
                 || strip.getChildCount() == 0 || !(strip.getChildAt(0) instanceof LinearLayout)) return false;
         ViewGroup tabs = (ViewGroup) strip.getChildAt(0);
         if (tabs.getChildCount() != 5) return false;
@@ -239,7 +263,7 @@ public final class DoubanLayoutPurifier {
 
     private static boolean isHomeHackViewPager(Object pager) {
         return pager instanceof View && isHomeView((View) pager)
-                && ((View) pager).getId() == 0x7f0a1950
+                && "viewpager".equals(entryName((View) pager))
                 && "com.douban.frodo.baseproject.view.HackViewPager".equals(pager.getClass().getName());
     }
 
@@ -298,6 +322,13 @@ public final class DoubanLayoutPurifier {
         traverseAndPurge(root, 0);
     }
 
+    /** 侧边栏抽屉子树专用：带上抽屉作用域，避免误伤首页/搜索页的细线元素。 */
+    public static void purgeDrawerViews(View drawerRoot) {
+        if (drawerRoot == null) return;
+        purgeSidebarTree(drawerRoot, 0);
+        SidebarInjector.inject(drawerRoot);
+    }
+
     public static void purgeStrip(ViewGroup strip) {
         if (strip == null || !isHomeStrip(strip)) return;
         Context ctx = strip.getContext();
@@ -311,19 +342,9 @@ public final class DoubanLayoutPurifier {
                 boolean hideGroup = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TAB_GROUP, true);
                 boolean hideShiji = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TAB_SHIJI, true);
 
-                for (int i = 0; i < 5; i++) {
-                    View child = container.getChildAt(i);
-                    boolean hide = (i == 1 && hideSubject)
-                            || (i == 2 && hideGroup)
-                            || (i == 3 && hideShiji);
-                    if (hide) {
-                        child.setVisibility(View.GONE);
-                        child.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.0f));
-                    } else {
-                        child.setVisibility(View.VISIBLE);
-                        child.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.0f));
-                    }
-                }
+                strip.removeOnLayoutChangeListener(BOTTOM_RESIZE);
+                strip.addOnLayoutChangeListener(BOTTOM_RESIZE);
+                layoutBottom(strip, container, hideSubject, hideGroup, hideShiji);
             } else if (childCount == 2 && isHomeTopStrip(strip)) {
                 // Top tab strip (0: 动态, 1: 推荐/精选)
                 boolean hideDongtai = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_DONGTAI, true);
@@ -349,37 +370,179 @@ public final class DoubanLayoutPurifier {
         }
     }
 
-    private static void traverseAndPurge(View view, int depth) {
-        if (view == null || depth > 25) return;
-        Context ctx = view.getContext();
-        String className = view.getClass().getName();
+    private static final View.OnLayoutChangeListener BOTTOM_RESIZE = (v,l,t,r,b,ol,ot,or,ob) -> {
+        if (r - l != or - ol) v.post(() -> purgeStrip((ViewGroup) v));
+    };
 
-        // 1. DrawerLayout listener injection
-        if (className.contains("DrawerLayout")) {
-            try {
-                if (view instanceof DrawerLayout) {
-                    DrawerLayout drawer = (DrawerLayout) view;
-                    if (drawer.getTag(0x7f0a0621) == null) {
-                        drawer.setTag(0x7f0a0621, Boolean.TRUE);
-                        drawer.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
-                            @Override
-                            public void onDrawerSlide(View drawerView, float slideOffset) {
-                                purgeViews(drawerView);
-                                SidebarInjector.inject(drawerView);
-                            }
-
-                            @Override
-                            public void onDrawerOpened(View drawerView) {
-                                purgeViews(drawerView);
-                                SidebarInjector.inject(drawerView);
-                            }
-                        });
-                    }
-                }
-            } catch (Throwable t) {
-                Log.w(TAG, "DrawerLayout hook warning: " + t);
+    private static void layoutBottom(ViewGroup strip, LinearLayout row, boolean subject, boolean group, boolean market) {
+        // HorizontalScrollView measures its child with an unbounded horizontal spec.
+        // Divide actual viewport pixels, not screen metrics or weights in a wrap-content row.
+        int count = 5 - (subject ? 1 : 0) - (group ? 1 : 0) - (market ? 1 : 0);
+        int width = strip.getWidth() - strip.getPaddingLeft() - strip.getPaddingRight();
+        ViewGroup.LayoutParams rp = row.getLayoutParams();
+        if (rp instanceof ViewGroup.MarginLayoutParams) {
+            ViewGroup.MarginLayoutParams margins = (ViewGroup.MarginLayoutParams) rp;
+            width -= margins.leftMargin + margins.rightMargin;
+        }
+        width = Math.max(0, width);
+        if (width > 0 && rp.width != width) {
+            rp.width = width;
+            row.setLayoutParams(rp);
+        }
+        int space = width - row.getPaddingLeft() - row.getPaddingRight();
+        boolean[] hidden = {false, subject, group, market, false};
+        for (int i = 0; i < 5; i++) {
+            if (!hidden[i]) {
+                LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) row.getChildAt(i).getLayoutParams();
+                space -= lp.leftMargin + lp.rightMargin;
             }
         }
+        if (row.getDividerDrawable() != null) {
+            int flags = row.getShowDividers();
+            int gaps = ((flags & LinearLayout.SHOW_DIVIDER_BEGINNING) != 0 ? 1 : 0)
+                    + ((flags & LinearLayout.SHOW_DIVIDER_MIDDLE) != 0 ? count - 1 : 0)
+                    + ((flags & LinearLayout.SHOW_DIVIDER_END) != 0 ? 1 : 0);
+            space -= gaps * Math.max(0, row.getDividerDrawable().getIntrinsicWidth());
+        }
+        space = Math.max(0, space);
+        int slot = 0;
+        for (int i = 0; i < 5; i++) {
+            View tab = row.getChildAt(i);
+            tab.setVisibility(hidden[i] ? View.GONE : View.VISIBLE);
+            if (width == 0) continue; // the listener reapplies after first layout
+            int pixels = hidden[i] ? 0 : space / count + (slot++ < space % count ? 1 : 0);
+            // Slot sizing replaces the strip's per-tab horizontal spacing. Keep native child dimensions.
+            if (!hidden[i] && (tab.getPaddingLeft() != 0 || tab.getPaddingRight() != 0))
+                tab.setPadding(0, tab.getPaddingTop(), 0, tab.getPaddingBottom());
+            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) tab.getLayoutParams();
+            if (lp.width != pixels || lp.weight != 0) {
+                lp.width = pixels;
+                lp.weight = 0;
+                tab.setLayoutParams(lp);
+            }
+        }
+        if (strip.getScrollX() != 0) strip.scrollTo(0, strip.getScrollY());
+    }
+
+    private static boolean isDrawerPanel(ViewGroup parent, View child) {
+        // The host and module may load DrawerLayout from different class loaders.
+        ViewGroup.LayoutParams lp = child.getLayoutParams();
+        if (!(parent instanceof DrawerLayout) && !"androidx.drawerlayout.widget.DrawerLayout".equals(parent.getClass().getName())) return false;
+        if (lp == null) return false;
+        try {
+            int gravity = lp instanceof DrawerLayout.LayoutParams ? ((DrawerLayout.LayoutParams) lp).gravity
+                    : lp.getClass().getField("gravity").getInt(lp);
+            int edge = Gravity.getAbsoluteGravity(gravity, parent.getLayoutDirection()) & Gravity.HORIZONTAL_GRAVITY_MASK;
+            return edge == Gravity.LEFT || edge == Gravity.RIGHT;
+        } catch (ReflectiveOperationException ignored) {
+            return false;
+        }
+    }
+
+    private static final WeakHashMap<View, Integer> sidebarVisibility = new WeakHashMap<>();
+    private static final ThreadLocal<View> sidebarWrite = new ThreadLocal<>();
+
+    static void onSidebarRowBound(ViewGroup row) {
+        if (SidebarInjector.menuRoot(row) != null) purgeSidebarEntry(row, row.getContext());
+        else setSidebarHidden(row, false);
+    }
+
+    // Intercept native VISIBLE/GONE requests at the write, not a draw later. Remember what the
+    // host wanted (including its own GONE), so switching a rule off restores native policy.
+    static int sidebarHostVisibility(View view, String entryName, int requested) {
+        if (sidebarWrite.get() == view) return requested;
+        boolean tracked = sidebarVisibility.containsKey(view);
+        String key = sidebarFixedKey(entryName);
+        if (!tracked && key == null) return requested;
+        if (SidebarInjector.menuRoot(view) == null) {
+            if (tracked) sidebarVisibility.remove(view);
+            return requested;
+        }
+        if (key == null && view instanceof ViewGroup && SidebarInjector.isRow(view)) {
+            key = sidebarRowKey((ViewGroup) view);
+        }
+        if (key != null && hideSidebarOption(view.getContext(), key)) {
+            sidebarVisibility.put(view, requested);
+            return View.GONE;
+        }
+        sidebarVisibility.remove(view);
+        return requested;
+    }
+
+    private static String sidebarFixedKey(String entryName) {
+        switch (entryName) {
+            case "my_beans": return PureSettings.KEY_HIDE_SIDE_BAG;
+            case "grid_entry": return PureSettings.KEY_HIDE_SIDE_SERVICES;
+            default: return null;
+        }
+    }
+
+    private static boolean minorTitle(CharSequence text) {
+        if (text == null) return false;
+        String title = text.toString().trim();
+        return title.equals("未成年人模式") || title.equals("未成年模式") || title.equals("青少年模式");
+    }
+
+    private static boolean isMinorEntry(View v) {
+        if (minorTitle(v.getContentDescription()) || (v instanceof TextView && minorTitle(((TextView)v).getText()))) return true;
+        if (v instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup)v;
+            for (int i = 0; i < group.getChildCount(); i++) if (isMinorEntry(group.getChildAt(i))) return true;
+        }
+        return false;
+    }
+
+    private static void setSidebarHidden(View v, boolean hide) {
+        int visibility = v.getVisibility();
+        Integer desired;
+        if (hide) {
+            sidebarVisibility.putIfAbsent(v, visibility);
+            desired = View.GONE;
+        } else {
+            desired = sidebarVisibility.remove(v);
+            if (visibility != View.GONE) return;
+        }
+        if (desired == null || visibility == desired) return;
+        View previous = sidebarWrite.get();
+        sidebarWrite.set(v);
+        try {
+            v.setVisibility(desired);
+        } finally {
+            if (previous == null) sidebarWrite.remove();
+            else sidebarWrite.set(previous);
+        }
+    }
+
+    static void purgeSidebarTree(View view, int depth) {
+        if (view == null || depth > 25) return;
+        String key = sidebarFixedKey(entryName(view));
+        if (key == null && view instanceof ViewGroup && SidebarInjector.isRow(view)) {
+            key = sidebarRowKey((ViewGroup) view);
+        }
+        if (key == null && view instanceof ImageView && !view.getClass().getName().contains("CircleImageView")) {
+            ViewGroup.LayoutParams lp = view.getLayoutParams();
+            if (lp != null && lp.height > 0 && lp.height <= 5) key = PureSettings.KEY_HIDE_SIDE_MINOR;
+        }
+        if (key == null && view instanceof TextView && "证照信息".contentEquals(((TextView) view).getText())) {
+            key = PureSettings.KEY_HIDE_SIDE_LICENSE;
+        }
+        if (key != null || sidebarVisibility.containsKey(view)) {
+            setSidebarHidden(view, key != null && hideSidebarOption(view.getContext(), key));
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) purgeSidebarTree(group.getChildAt(i), depth + 1);
+        }
+    }
+
+    private static void traverseAndPurge(View view, int depth) {
+        if (view == null || depth > 25) return;
+        if (SidebarInjector.isMenuRoot(view)) {
+            purgeDrawerViews(view);
+            return;
+        }
+        Context ctx = view.getContext();
+        String className = view.getClass().getName();
 
         // 2. PagerSlidingTabStrip (Bottom nav and top tab)
         if (className.contains("PagerSlidingTabStrip") && (view instanceof ViewGroup)) {
@@ -402,29 +565,20 @@ public final class DoubanLayoutPurifier {
             }
         }
 
-        // 4. SlideMenuView
-        if (className.contains("SlideMenuView") || className.contains("silde_menu")) {
-            SidebarInjector.inject(view);
-        }
-
         // 5. Inspect ID based elements
         int id = view.getId();
         if (id != View.NO_ID) {
-            String entryName = "";
-            try {
-                entryName = view.getResources().getResourceEntryName(id);
-            } catch (Throwable ignored) {
-            }
+            String entryName = entryName(view);
 
             // Top right Podcast (耳机) icon
-            if ("menu_podcast".equals(entryName) || id == 0x7f0a0d6c) {
+            if ("menu_podcast".equals(entryName)) {
                 boolean hidePodcast = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_PODCAST, true);
                 view.setVisibility(hidePodcast ? View.GONE : View.VISIBLE);
             }
             // Header container, left image, right banner (首页顶部横幅、宠物及活动推广)
-            else if ("header_container".equals(entryName) || id == 0x7f0a08b0
-                    || "header_left_image".equals(entryName) || id == 0x7f0a08bf
-                    || "header_right_banner".equals(entryName) || id == 0x7f0a08c6) {
+            else if ("header_container".equals(entryName)
+                    || "header_left_image".equals(entryName)
+                    || "header_right_banner".equals(entryName)) {
                 boolean hidePets = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_TOP_PETS, true);
                 view.setVisibility(hidePets ? View.GONE : View.VISIBLE);
                 if (hidePets) {
@@ -437,9 +591,8 @@ public final class DoubanLayoutPurifier {
                 }
             }
             // Home notification / venue banner (播客马拉松/活动/场馆横幅: notification_container / venue)
-            else if ("notification_container".equals(entryName) || id == 0x7f0a0ead
-                    || entryName.startsWith("venue_") || id == 0x7f0a18ea || id == 0x7f0a18eb
-                    || id == 0x7f0a18ed || id == 0x7f0a18ec || id == 0x7f0a0c1f || id == 0x7f0a0c20) {
+            else if ("notification_container".equals(entryName)
+                    || entryName.startsWith("venue_") || "left_venue_image".equals(entryName) || "left_venue_mask".equals(entryName)) {
                 boolean hideBanner = PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true);
                 if (hideBanner) {
                     view.setVisibility(View.GONE);
@@ -452,8 +605,8 @@ public final class DoubanLayoutPurifier {
                 }
             }
             // RexxarStructHeader llHeaderContainer (contains post WebView, post big ad, and ad dividers)
-            else if ("llHeaderContainer".equals(entryName) || id == 0x7f0a0c67) {
-                if (view instanceof ViewGroup) {
+            else if ("llHeaderContainer".equals(entryName)) {
+                if (view instanceof ViewGroup && PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_FEED_AD, true)) {
                     ViewGroup vg = (ViewGroup) view;
                     int childCount = vg.getChildCount();
                     for (int i = 0; i < childCount; i++) {
@@ -493,29 +646,20 @@ public final class DoubanLayoutPurifier {
                 }
             }
             // Homepage right bottom Post button (铅笔浮动按钮)
-            else if (("btn_post".equals(entryName) || id == 0x7f0a02e1) && isHomeView(view)) {
+            else if (("btn_post".equals(entryName)) && isHomeView(view)) {
                 boolean hidePost = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_HOME_POST_BTN, true);
                 view.setVisibility(hidePost ? View.GONE : View.VISIBLE);
             }
-            // Sidebar "我的背包"
-            else if ("my_beans".equals(entryName)) {
-                boolean hideBag = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_BAG, true);
-                view.setVisibility(hideBag ? View.GONE : View.VISIBLE);
-            }
-            // Sidebar bottom service grid (订单、购物车、钱包、阅读等)
-            else if ("grid_entry".equals(entryName) || id == 0x7f0a07ed) {
-                boolean hideServices = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_SERVICES, true);
-                view.setVisibility(hideServices ? View.GONE : View.VISIBLE);
-            }
             // Search page: 热门话题 title & RecyclerView
-            else if ("gallery_topic_title".equals(entryName) || "gallery_topics".equals(entryName) || id == 0x7f0a07cb || id == 0x7f0a07cc) {
+            else if (("gallery_topic_title".equals(entryName) || "gallery_topics".equals(entryName)) && SearchLanding.inLanding(view)) {
                 boolean hideTopics = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SEARCH_HOT_TOPICS, true);
                 view.setVisibility(hideTopics ? View.GONE : View.VISIBLE);
             }
             // Search page: 实时热门书影音/讨论 ViewPager & indicator (默认保留)
-            else if ("vpSubject".equals(entryName) || "pageIndicatorView".equals(entryName) || id == 0x7f0a1978 || id == 0x7f0a0f6d) {
+            else if (("vpSubject".equals(entryName) || "pageIndicatorView".equals(entryName)) && SearchLanding.inLanding(view)) {
                 boolean hideTrends = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SEARCH_TRENDS, false);
-                view.setVisibility(hideTrends ? View.GONE : View.VISIBLE);
+                SearchLanding.apply(view, hideTrends);
+                if ("vpSubject".equals(entryName)) SearchPagerHeight.watch(view);
             }
         }
 
@@ -545,91 +689,40 @@ public final class DoubanLayoutPurifier {
             }
         }
 
-        // 6. Sidebar list entries (SlideMenuListEntryView)
-        if (className.contains("SlideMenuListEntryView") && (view instanceof ViewGroup)) {
-            purgeSidebarEntry((ViewGroup) view, ctx);
-        }
-
-        // 7. Divider lines in sidebar
-        if (view instanceof ImageView && !(className.contains("CircleImageView"))) {
-            ViewGroup.LayoutParams lp = view.getLayoutParams();
-            if (lp != null && lp.height > 0 && lp.height <= 5) {
-                boolean hideMinor = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_MINOR, true);
-                if (hideMinor) {
-                    view.setVisibility(View.GONE);
-                }
-            }
-        }
-
-        // 8. License info at sidebar bottom
-        if (view instanceof TextView) {
-            CharSequence cs = ((TextView) view).getText();
-            if (cs != null && cs.toString().contains("证照信息")) {
-                boolean hideLicense = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_LICENSE, true);
-                if (hideLicense) {
-                    ViewParent parent = view.getParent();
-                    if (parent instanceof View) {
-                        ((View) parent).setVisibility(View.GONE);
-                    } else {
-                        view.setVisibility(View.GONE);
-                    }
-                }
-            }
-        }
-
         // Recurse into children
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
-            int count = group.getChildCount();
-            for (int i = 0; i < count; i++) {
-                traverseAndPurge(group.getChildAt(i), depth + 1);
+            // A landing-page child can insert or remove its following rank panel.
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (isDrawerPanel(group, child)) purgeDrawerViews(child);
+                else traverseAndPurge(child, depth + 1);
             }
         }
     }
 
-    private static void purgeSidebarEntry(ViewGroup entryView, Context ctx) {
-        String allText = extractAllText(entryView);
-        if (allText == null || allText.isEmpty()) return;
+    private static void purgeSidebarEntry(ViewGroup row, Context ctx) {
+        String key = sidebarRowKey(row);
+        setSidebarHidden(row, key != null && hideSidebarOption(ctx, key));
+    }
 
-        // Never hide our injected entry or Settings
-        if (allText.contains("DoubanPure") || allText.equals("设置") || allText.startsWith("设置")) {
-            entryView.setVisibility(View.VISIBLE);
-            return;
-        }
+    private static String sidebarRowKey(ViewGroup row) {
+        String text = extractAllText(row);
+        if (text.contains("DoubanPure") || text.startsWith("设置")) return null;
+        if (isMinorEntry(row)) return PureSettings.KEY_HIDE_SIDE_MINOR;
+        if (text.contains("草稿")) return PureSettings.KEY_HIDE_SIDE_DRAFTS;
+        if (text.contains("签到")) return PureSettings.KEY_HIDE_SIDE_CHECKIN;
+        if (text.contains("帮助") || text.contains("反馈")) return PureSettings.KEY_HIDE_SIDE_FEEDBACK;
+        if (text.contains("社区管理")) return PureSettings.KEY_HIDE_SIDE_COMMUNITY;
+        if (text.contains("收藏") || text.contains("豆列")) return PureSettings.KEY_HIDE_SIDE_FAV;
+        if (text.contains("关注")) return PureSettings.KEY_HIDE_SIDE_FOLLOW;
+        if (text.contains("历史")) return PureSettings.KEY_HIDE_SIDE_HISTORY;
+        return null;
+    }
 
-        boolean hide = false;
-        if (allText.contains("未成年")) {
-            hide = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_MINOR, true);
-        } else if (allText.contains("草稿")) {
-            hide = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_DRAFTS, true);
-        } else if (allText.contains("签到")) {
-            hide = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_CHECKIN, true);
-        } else if (allText.contains("帮助") || allText.contains("反馈")) {
-            hide = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_FEEDBACK, true);
-        } else if (allText.contains("社区管理")) {
-            hide = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_COMMUNITY, true);
-        } else if (allText.contains("收藏") || allText.contains("豆列")) {
-            hide = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_FAV, false);
-        } else if (allText.contains("关注")) {
-            hide = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_FOLLOW, false);
-        } else if (allText.contains("历史")) {
-            hide = PureSettings.getBoolean(ctx, PureSettings.KEY_HIDE_SIDE_HISTORY, false);
-        }
-
-        if (hide) {
-            entryView.setVisibility(View.GONE);
-            ViewGroup.LayoutParams lp = entryView.getLayoutParams();
-            if (lp != null) {
-                lp.width = 0;
-                lp.height = 0;
-                entryView.setLayoutParams(lp);
-            }
-            if (entryView.getChildCount() > 0) {
-                entryView.getChildAt(0).setVisibility(View.GONE);
-            }
-        } else {
-            entryView.setVisibility(View.VISIBLE);
-        }
+    private static boolean hideSidebarOption(Context ctx, String key) {
+        return PureSettings.getBoolean(ctx, key, !PureSettings.KEY_HIDE_SIDE_FAV.equals(key)
+                && !PureSettings.KEY_HIDE_SIDE_FOLLOW.equals(key) && !PureSettings.KEY_HIDE_SIDE_HISTORY.equals(key));
     }
 
     private static String extractAllText(View view) {
@@ -650,8 +743,8 @@ public final class DoubanLayoutPurifier {
 
     public static boolean isAdView(View view) {
         if (view == null) return false;
-        int id = view.getId();
-        if (id == 0x7f0a0ead || id == 0x7f0a18ea) {
+        String entryName = entryName(view);
+        if ("notification_container".equals(entryName) || "venue_bg".equals(entryName)) {
             return true;
         }
         String name = view.getClass().getName();

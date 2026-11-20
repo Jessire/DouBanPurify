@@ -1,0 +1,51 @@
+package com.douban.frodo.activity;
+import android.app.Activity;
+import android.content.res.Resources;
+public class FixtureActivity extends Activity {
+ private Resources host;
+ @Override public Resources getResources(){Resources base=super.getResources();if(host==null)host=new Resources(base.getAssets(),base.getDisplayMetrics(),base.getConfiguration()){
+  @Override public String getResourceEntryName(int id){switch(id){
+case 0x7f0a14c1: return "tab_layout";
+case 0x7f0a14b8: return "tabContainer";
+case 0x7f0a14c4: return "tab_strip";
+case 0x7f0a14bb: return "tabName";
+case 0x7f0a1958: return "viewpager";
+case 0x7f0a1950: return "view_top_radius";
+case 0x7f0a07d1: return "gallery_topic_title";
+case 0x7f0a07cb: return "gallery_cover";
+case 0x7f0a07d2: return "gallery_topics";
+case 0x7f0a07cc: return "gallery_cover_layout";
+case 0x7f0a02e3: return "btn_post";
+case 0x7f0a02e1: return "btn_play";
+case 0x7f0a0eb6: return "notification_container";
+case 0x7f0a0ead: return "notice_rumour_layout";
+case 0x7f0a18f2: return "venue_bg";
+case 0x7f0a18ea: return "vendor_item_layout";
+case 0x7f0a08cc: return "header_right_banner";
+case 0x7f0a08c6: return "header_more_title";
+case 0x7f0a0d75: return "menu_podcast";
+case 0x7f0a0d6c: return "menu_layout";
+case 0x7f0a08b6: return "header_container";
+case 0x7f0a08b0: return "header_bg_container";
+case 0x7f0a08c5: return "header_left_image";
+case 0x7f0a08bf: return "header_gradient";
+case 0x7f0a18f3: return "venue_close";
+case 0x7f0a18eb: return "vendor_layout";
+case 0x7f0a18f5: return "venue_title";
+case 0x7f0a18ed: return "vendor_name";
+case 0x7f0a18f4: return "venue_subtitle";
+case 0x7f0a18ec: return "vendor_list_view";
+case 0x7f0a0c27: return "left_venue_image";
+case 0x7f0a0c1f: return "left_image";
+case 0x7f0a0c28: return "left_venue_mask";
+case 0x7f0a0c20: return "left_layout";
+case 0x7f0a0c6f: return "llHeaderContainer";
+case 0x7f0a0c67: return "llContent";
+case 0x7f0a07f3: return "grid_entry";
+case 0x7f0a07ed: return "gradient_background";
+case 0x7f0a04a8: return "container";
+case 0x7f0a1980: return "vpSubject";
+case 0x7f0a1978: return "voter_title";
+case 0x7f0a0f73: return "pageIndicatorView";
+case 0x7f0a0f6d: return "owner_container";
+default:return super.getResourceEntryName(id);}}};return host;}}

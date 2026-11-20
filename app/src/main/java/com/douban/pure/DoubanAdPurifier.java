@@ -108,7 +108,7 @@ public final class DoubanAdPurifier {
             for (String uMethod : updateMethods) {
                 Class<?> clazz = ReflectUtils.findClass(adViewCls, cl);
                 if (clazz != null) {
-                    ReflectUtils.hookMethodWithTypeSafety(xposed, clazz, uMethod, null);
+                    hookGated(xposed, clazz, uMethod, PureSettings.KEY_BLOCK_FEED_AD);
                 }
             }
         }
@@ -139,22 +139,22 @@ public final class DoubanAdPurifier {
         String cls = "com.douban.frodo.struct2.RexxarAdActivity2";
         Class<?> clazz = ReflectUtils.findClass(cls, cl);
         if (clazz == null) return;
-        ReflectUtils.hookMethodWithTypeSafety(xposed, clazz, "buildAdContainer", null);
+        hookGated(xposed, clazz, "buildAdContainer", PureSettings.KEY_BLOCK_FEED_AD);
     }
 
     private static void hookHomeHeaderAd(XposedInterface xposed, ClassLoader cl) {
         String modelCls = "com.douban.frodo.fragment.homeheader.HomeHeaderModel";
         Class<?> modelClass = ReflectUtils.findClass(modelCls, cl);
         if (modelClass != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, modelClass, "getHomeHeader", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, modelClass, "refreshHomeHeader", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, modelClass, "updateHomeHeader", null);
+            hookGated(xposed, modelClass, "getHomeHeader", PureSettings.KEY_BLOCK_FEED_AD);
+            hookGated(xposed, modelClass, "refreshHomeHeader", PureSettings.KEY_BLOCK_FEED_AD);
+            hookGated(xposed, modelClass, "updateHomeHeader", PureSettings.KEY_BLOCK_FEED_AD);
         }
 
         String netCls = "n5.e";
         Class<?> netClass = ReflectUtils.findClass(netCls, cl);
         if (netClass != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, netClass, "y", null);
+            hookGated(xposed, netClass, "y", PureSettings.KEY_BLOCK_FEED_AD);
         }
     }
 
@@ -170,6 +170,7 @@ public final class DoubanAdPurifier {
             if (clazz != null) {
                 ReflectUtils.hookAllMethods(xposed, clazz, "bind", chain -> {
                     Object res = chain.proceed();
+                    if (!PureSettings.getBoolean(null, PureSettings.KEY_BLOCK_FEED_AD, true)) return res;
                     try {
                         Method getRoot = clazz.getMethod("getRoot");
                         View root = (View) getRoot.invoke(res);
@@ -188,6 +189,7 @@ public final class DoubanAdPurifier {
                 });
                 ReflectUtils.hookAllMethods(xposed, clazz, "inflate", chain -> {
                     Object res = chain.proceed();
+                    if (!PureSettings.getBoolean(null, PureSettings.KEY_BLOCK_FEED_AD, true)) return res;
                     try {
                         Method getRoot = clazz.getMethod("getRoot");
                         View root = (View) getRoot.invoke(res);
@@ -209,124 +211,41 @@ public final class DoubanAdPurifier {
     }
 
     private static void hookThirdPartyAndSdkAds(XposedInterface xposed, ClassLoader cl) {
-        // 1. ByteDance CSJ: Hook ad loaders on TTAdNative
-        String ttAdNative = "com.bytedance.sdk.openadsdk.TTAdNative";
-        Class<?> ttNativeCls = ReflectUtils.findClass(ttAdNative, cl);
-        if (ttNativeCls != null) {
-            String[] ttMethods = {"loadFeedAd", "loadSplashAd", "loadDrawFeedAd", "loadBannerExpressAd",
-                    "loadNativeExpressAd", "loadStream", "loadRewardVideoAd", "loadFullScreenVideoAd"};
-            for (String m : ttMethods) {
-                ReflectUtils.hookMethodWithTypeSafety(xposed, ttNativeCls, m, null);
-            }
-        }
-
-        // TTDelegateActivity
-        String ttDelegate = "com.bytedance.sdk.openadsdk.core.activity.base.TTDelegateActivity";
-        ReflectUtils.hookMethod(xposed, ttDelegate, cl, "onCreate", new Class<?>[]{Bundle.class}, chain -> {
-            try {
-                Activity act = (Activity) chain.getThisObject();
-                act.finish();
-                Log.i(TAG, "TTDelegateActivity finished immediately");
-                return null;
-            } catch (Throwable ignored) {
-            }
-            return chain.proceed();
-        });
-
-        // 2. Tencent GDT: Hook ad loaders
-        Class<?> gdtAd = ReflectUtils.findClass("com.qq.e.ads.nativ.NativeUnifiedAD", cl);
-        if (gdtAd != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtAd, "loadData", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtAd, "loadAD", null);
-        }
-
-        Class<?> gdtExpress = ReflectUtils.findClass("com.qq.e.ads.nativ.NativeExpressAD", cl);
-        if (gdtExpress != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtExpress, "loadAD", null);
-        }
-
+        Class<?> tt = ReflectUtils.findClass("com.bytedance.sdk.openadsdk.TTAdNative", cl);
+        hookSplashSdkMethod(xposed, tt, "loadSplashAd");
+        for (String m : new String[]{"loadFeedAd", "loadDrawFeedAd"})
+            hookGated(xposed, tt, m, PureSettings.KEY_BLOCK_FEED_AD);
         Class<?> gdtSplash = ReflectUtils.findClass("com.qq.e.ads.splash.SplashAD", cl);
         if (gdtSplash != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtSplash, "fetchAndShowIn", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtSplash, "fetchFullScreenAndShowIn", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtSplash, "fetchAdOnly", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtSplash, "showAd", null);
+            hookSplashSdkMethod(xposed, gdtSplash, "fetchAndShowIn");
+            hookSplashSdkMethod(xposed, gdtSplash, "fetchFullScreenAndShowIn");
+            hookSplashSdkMethod(xposed, gdtSplash, "fetchAdOnly");
+            hookSplashSdkMethod(xposed, gdtSplash, "showAd");
         }
 
-        Class<?> gdtInters = ReflectUtils.findClass("com.qq.e.ads.interstitial2.UnifiedInterstitialAD", cl);
-        if (gdtInters != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtInters, "loadAD", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtInters, "show", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtInters, "showAsPopupWindow", null);
-        }
-
-        Class<?> gdtReward = ReflectUtils.findClass("com.qq.e.ads.rewardvideo.RewardVideoAD", cl);
-        if (gdtReward != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtReward, "loadAD", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, gdtReward, "showAD", null);
-        }
-
-        // 3. Jingdong Ad SDK (JAD)
-        String[] jadClasses = {
-                "com.jd.ad.sdk.JADBanner",
-                "com.jd.ad.sdk.banner.JADBanner",
-                "com.jd.ad.sdk.JADFeeds",
-                "com.jd.ad.sdk.feed.JADFeed",
-                "com.jd.ad.sdk.JADSplash",
-                "com.jd.ad.sdk.splash.JADSplash",
-                "com.jd.ad.sdk.JADInterstitial",
-                "com.jd.ad.sdk.interstitial.JADInterstitial"
-        };
-        for (String jadCls : jadClasses) {
-            Class<?> jc = ReflectUtils.findClass(jadCls, cl);
-            if (jc != null) {
-                ReflectUtils.hookMethodWithTypeSafety(xposed, jc, "loadAd", null);
-            }
-        }
-
-        // 4. Baidu MobAds
-        Class<?> baiduNative = ReflectUtils.findClass("com.baidu.mobads.sdk.api.BaiduNativeManager", cl);
-        if (baiduNative != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduNative, "loadFeedAd", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduNative, "loadExpressAd", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduNative, "loadNativeAd", null);
-        }
-
+        for (String name : new String[]{"com.jd.ad.sdk.JADSplash", "com.jd.ad.sdk.splash.JADSplash"})
+            hookSplashSdkMethod(xposed, ReflectUtils.findClass(name, cl), "loadAd");
+        for (String name : new String[]{"com.jd.ad.sdk.JADFeeds", "com.jd.ad.sdk.feed.JADFeed"})
+            hookGated(xposed, ReflectUtils.findClass(name, cl), "loadAd", PureSettings.KEY_BLOCK_FEED_AD);
+        hookGated(xposed, ReflectUtils.findClass("com.baidu.mobads.sdk.api.BaiduNativeManager", cl), "loadFeedAd", PureSettings.KEY_BLOCK_FEED_AD);
         Class<?> baiduSplash = ReflectUtils.findClass("com.baidu.mobads.sdk.api.SplashAd", cl);
         if (baiduSplash != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduSplash, "loadAndShow", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, baiduSplash, "load", null);
+            hookSplashSdkMethod(xposed, baiduSplash, "loadAndShow");
+            hookSplashSdkMethod(xposed, baiduSplash, "load");
         }
 
         // 5. Douban Internal Ad Fetchers
-        Class<?> sdkFetcher = ReflectUtils.findClass("com.douban.frodo.baseproject.ad.sdk.AbstractSdkFetcher", cl);
-        if (sdkFetcher != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, sdkFetcher, "doFetch", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, sdkFetcher, "fetch", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, sdkFetcher, "fetchAd", null);
-        }
-
-        Class<?> intersMgr = ReflectUtils.findClass("com.douban.frodo.baseproject.ad.interstitial.AdIntersManager", cl);
-        if (intersMgr != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, intersMgr, "show", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, intersMgr, "showAd", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, intersMgr, "showIntersCard", null);
-        }
-
-        Class<?> pullAd = ReflectUtils.findClass("com.douban.frodo.baseproject.pullad.PullAdContainer", cl);
-        if (pullAd != null) {
-            ReflectUtils.hookMethodWithTypeSafety(xposed, pullAd, "showAd", null);
-            ReflectUtils.hookMethodWithTypeSafety(xposed, pullAd, "loadAd", null);
-        }
-
+        // Shared fetchers, delegates, rewards and interstitials are not feed-specific.
         Class<?> subjectAd = ReflectUtils.findClass("com.douban.frodo.subject.view.SubjectAdHeader", cl);
         if (subjectAd != null) {
             ReflectUtils.hookAllMethods(xposed, subjectAd, "initView", chain -> {
+                if (!PureSettings.getBoolean(getContext(chain.getThisObject()), PureSettings.KEY_BLOCK_FEED_AD, true)) return chain.proceed();
                 Object obj = chain.getThisObject();
                 if (obj instanceof View) ((View) obj).setVisibility(View.GONE);
                 return null;
             });
             ReflectUtils.hookAllMethods(xposed, subjectAd, "updateView", chain -> {
+                if (!PureSettings.getBoolean(getContext(chain.getThisObject()), PureSettings.KEY_BLOCK_FEED_AD, true)) return chain.proceed();
                 Object obj = chain.getThisObject();
                 if (obj instanceof View) ((View) obj).setVisibility(View.GONE);
                 return null;
@@ -370,26 +289,23 @@ public final class DoubanAdPurifier {
                 "com.douban.frodo.splash.SplashBaseRequestor"
         };
 
+        // 只有开启「跳过开屏广告」时才阻断请求；关闭时必须完整放行，否则开屏永远不会回调，
+        // 首页内容也不会装载（表现为顶栏/底栏已绘制但内容区空白）。
+        String[] requestorMethods = {"getRequestTimeout", "getBidTimeout", "request", "fetch",
+                "fetchAd", "requestSplashAd", "loadSplashAd", "showAd", "showSplashAd", "showSplash"};
         for (String reqCls : requestorClasses) {
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "getRequestTimeout", chain -> 0);
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "getBidTimeout", chain -> 0);
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "request", chain -> null);
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "fetch", chain -> null);
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "fetchAd", chain -> null);
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "requestSplashAd", chain -> null);
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "loadSplashAd", chain -> null);
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "showAd", chain -> null);
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "showSplashAd", chain -> null);
-            ReflectUtils.hookAllMethods(xposed, reqCls, cl, "showSplash", chain -> null);
+            for (String m : requestorMethods) {
+                hookSplashTypedMethod(xposed, reqCls, cl, m);
+            }
         }
 
         // SplashAdShowUtils
-        ReflectUtils.hookAllMethods(xposed, "com.douban.frodo.splash.SplashAdShowUtils", cl, "showSplashAd", chain -> null);
+        hookSplashTypedMethod(xposed, "com.douban.frodo.splash.SplashAdShowUtils", cl, "showSplashAd");
 
         // AdApi splash request
         String adApi = "com.douban.frodo.network.AdApi";
-        ReflectUtils.hookAllMethods(xposed, adApi, cl, "getSplashAd", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, adApi, cl, "requestSplashAd", chain -> null);
+        hookSplashTypedMethod(xposed, adApi, cl, "getSplashAd");
+        hookSplashTypedMethod(xposed, adApi, cl, "requestSplashAd");
 
         Log.i(TAG, "Splash requestor hooks installed");
     }
@@ -430,10 +346,6 @@ public final class DoubanAdPurifier {
             if (PureSettings.getBoolean(ctx, PureSettings.KEY_SKIP_SPLASH, true)) {
                 return null;
             }
-            return chain.proceed();
-        });
-
-        ReflectUtils.hookAllMethods(xposed, splashCls, cl, "gotoMainActivity", chain -> {
             return chain.proceed();
         });
 
@@ -494,11 +406,22 @@ public final class DoubanAdPurifier {
     }
 
     private static void hookAdDurationAndTimeouts(XposedInterface xposed, ClassLoader cl) {
+        // 倒计时/时长为 0 会导致开屏广告永远等不到「播放结束」回调，
+        // 因此这些改写必须跟随「跳过开屏广告」开关，关闭时保持宿主原值。
         String adCls = "com.douban.frodo.baseproject.ad.model.DoubanAd";
-        ReflectUtils.hookAllMethods(xposed, adCls, cl, "getDuration", chain -> 0);
-        ReflectUtils.hookAllMethods(xposed, adCls, cl, "getVideoSkipDelay", chain -> 0);
+        ReflectUtils.hookAllMethods(xposed, adCls, cl, "getDuration", chain -> {
+            if (skipSplash(chain.getThisObject())) return 0;
+            return chain.proceed();
+        });
+        ReflectUtils.hookAllMethods(xposed, adCls, cl, "getVideoSkipDelay", chain -> {
+            if (skipSplash(chain.getThisObject())) return 0;
+            return chain.proceed();
+        });
 
         ReflectUtils.hookAllMethods(xposed, "com.douban.ad.p", cl, "handleMessage", chain -> {
+            if (!skipSplash(chain.getThisObject())) {
+                return chain.proceed();
+            }
             try {
                 Object msgObj = chain.getArg(0);
                 if (msgObj instanceof android.os.Message) {
@@ -513,9 +436,15 @@ public final class DoubanAdPurifier {
         });
 
         ReflectUtils.hookAllMethods(xposed, "com.douban.ad.widget.CountDownView", cl, "setDuration", chain -> {
-            return chain.proceed(new Object[]{0});
+            if (skipSplash(chain.getThisObject())) {
+                return chain.proceed(new Object[]{0});
+            }
+            return chain.proceed();
         });
-        ReflectUtils.hookAllMethods(xposed, "com.douban.ad.widget.CountDownView", cl, "startCountDown", chain -> null);
+        ReflectUtils.hookAllMethods(xposed, "com.douban.ad.widget.CountDownView", cl, "startCountDown", chain -> {
+            if (skipSplash(chain.getThisObject())) return null;
+            return chain.proceed();
+        });
 
         Log.i(TAG, "Ad duration and countdown hooks installed");
     }
@@ -523,9 +452,9 @@ public final class DoubanAdPurifier {
     private static void hookBetaUpdateAndRating(XposedInterface xposed, ClassLoader cl) {
         // 1. Beta APK Check & Dialog
         String betaCheck = "com.douban.frodo.update.BetaApkChecker";
-        ReflectUtils.hookAllMethods(xposed, betaCheck, cl, "check", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, betaCheck, cl, "checkUpdate", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, betaCheck, cl, "showBetaApkDialog", chain -> null);
+        hookGated(xposed, ReflectUtils.findClass(betaCheck, cl), "check", PureSettings.KEY_BLOCK_BETA_UPDATE);
+        hookGated(xposed, ReflectUtils.findClass(betaCheck, cl), "checkUpdate", PureSettings.KEY_BLOCK_BETA_UPDATE);
+        hookGated(xposed, ReflectUtils.findClass(betaCheck, cl), "showBetaApkDialog", PureSettings.KEY_BLOCK_BETA_UPDATE);
 
         String betaDialog = "com.douban.frodo.activity.BetaApkDialogActivity";
         ReflectUtils.hookMethod(xposed, betaDialog, cl, "onCreate", new Class<?>[]{Bundle.class}, chain -> {
@@ -576,7 +505,7 @@ public final class DoubanAdPurifier {
             return chain.proceed();
         });
 
-        // 4. Intercept startActivity that launches Beta dialog, Hot splash, or CSJ ad activities
+        // 4. Intercept startActivity that launches Beta dialog or upgrade activities
         try {
             Method startActivityMethod = Activity.class.getDeclaredMethod("startActivity", Intent.class);
             xposed.hook(startActivityMethod).intercept(chain -> {
@@ -589,18 +518,6 @@ public final class DoubanAdPurifier {
                         if (clsName.contains("BetaApk") || clsName.contains("BetaApkDialogActivity") || clsName.contains("UpgradeActivity")) {
                             if (PureSettings.getBoolean(caller, PureSettings.KEY_BLOCK_BETA_UPDATE, true)) {
                                 Log.i(TAG, "Prevented launching: " + clsName);
-                                return null;
-                            }
-                        }
-                        if (clsName.contains("SplashActivityHot")) {
-                            if (PureSettings.getBoolean(caller, PureSettings.KEY_SKIP_SPLASH, true)) {
-                                Log.i(TAG, "Prevented launching SplashActivityHot");
-                                return null;
-                            }
-                        }
-                        if (clsName.contains("openadsdk") || clsName.contains("TTDelegateActivity")) {
-                            if (PureSettings.getBoolean(caller, PureSettings.KEY_SKIP_SPLASH, true)) {
-                                Log.i(TAG, "Prevented launching CSJ Ad Activity: " + clsName);
                                 return null;
                             }
                         }
@@ -634,21 +551,129 @@ public final class DoubanAdPurifier {
             if (PureSettings.getBoolean(ctx, PureSettings.KEY_BLOCK_UMENG, true)) return null;
             return chain.proceed();
         });
-        ReflectUtils.hookAllMethods(xposed, mob, cl, "onEventValue", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, mob, cl, "onPageStart", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, mob, cl, "onPageEnd", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, mob, cl, "onResume", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, mob, cl, "onPause", chain -> null);
+        hookGated(xposed, ReflectUtils.findClass(mob, cl), "onEventValue", PureSettings.KEY_BLOCK_UMENG);
+        hookGated(xposed, ReflectUtils.findClass(mob, cl), "onPageStart", PureSettings.KEY_BLOCK_UMENG);
+        hookGated(xposed, ReflectUtils.findClass(mob, cl), "onPageEnd", PureSettings.KEY_BLOCK_UMENG);
+        hookGated(xposed, ReflectUtils.findClass(mob, cl), "onResume", PureSettings.KEY_BLOCK_UMENG);
+        hookGated(xposed, ReflectUtils.findClass(mob, cl), "onPause", PureSettings.KEY_BLOCK_UMENG);
 
         String crash = "com.umeng.umcrash.UMCrash";
-        ReflectUtils.hookAllMethods(xposed, crash, cl, "init", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, crash, cl, "initConfig", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, crash, cl, "generateCustomLog", chain -> null);
+        hookGated(xposed, ReflectUtils.findClass(crash, cl), "init", PureSettings.KEY_BLOCK_UMENG);
+        hookGated(xposed, ReflectUtils.findClass(crash, cl), "initConfig", PureSettings.KEY_BLOCK_UMENG);
+        hookGated(xposed, ReflectUtils.findClass(crash, cl), "generateCustomLog", PureSettings.KEY_BLOCK_UMENG);
 
         String dispatch = "com.umeng.commonsdk.framework.UMWorkDispatch";
-        ReflectUtils.hookAllMethods(xposed, dispatch, cl, "sendEvent", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, dispatch, cl, "sendEventEx", chain -> null);
-        ReflectUtils.hookAllMethods(xposed, dispatch, cl, "sendEventInternal", chain -> null);
+        hookGated(xposed, ReflectUtils.findClass(dispatch, cl), "sendEvent", PureSettings.KEY_BLOCK_UMENG);
+        hookGated(xposed, ReflectUtils.findClass(dispatch, cl), "sendEventEx", PureSettings.KEY_BLOCK_UMENG);
+        hookGated(xposed, ReflectUtils.findClass(dispatch, cl), "sendEventInternal", PureSettings.KEY_BLOCK_UMENG);
+    }
+
+    /** 只拦截开屏类 SDK 调用：跟随「跳过开屏广告」开关，关闭时完整放行。 */
+    private static void hookSplashSdkMethod(XposedInterface xposed, Class<?> clazz, String methodName) {
+        hookSplashTypedMethod(xposed, clazz, methodName);
+    }
+
+    private static void hookSplashTypedMethod(XposedInterface xposed, String className,
+                                               ClassLoader cl, String methodName) {
+        hookSplashTypedMethod(xposed, ReflectUtils.findClass(className, cl), methodName);
+    }
+
+    /**
+     * 按原方法返回类型给出「空值」，避免把 null/Integer 塞给 void 之外的原始类型导致崩溃。
+     * 关闭「跳过开屏广告」时一律放行宿主原实现。
+     */
+    private static void hookSplashTypedMethod(XposedInterface xposed, Class<?> clazz, String methodName) {
+        hookGated(xposed, clazz, methodName, PureSettings.KEY_SKIP_SPLASH);
+    }
+
+    private static void hookGated(XposedInterface xposed, Class<?> clazz, String methodName, String key) {
+        if (clazz == null || methodName == null) return;
+        try {
+            for (Method m : clazz.getDeclaredMethods()) {
+                if (!methodName.equals(m.getName())) continue;
+                m.setAccessible(true);
+                final Class<?> returnType = m.getReturnType();
+                xposed.hook(m).intercept(chain -> {
+                    if (!PureSettings.getBoolean(getContext(chain.getThisObject()), key, true)) return chain.proceed();
+                    return emptyValueFor(returnType);
+                });
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "hookSplashTypedMethod failed: " + clazz.getName() + "#" + methodName + " - " + t);
+        }
+    }
+
+    private static Object emptyValueFor(Class<?> type) {
+        if (type == void.class) return null;
+        if (type == boolean.class) return Boolean.FALSE;
+        if (type == int.class) return 0;
+        if (type == long.class) return 0L;
+        if (type == short.class) return (short) 0;
+        if (type == byte.class) return (byte) 0;
+        if (type == char.class) return '\0';
+        if (type == float.class) return 0f;
+        if (type == double.class) return 0d;
+        return null;
+    }
+
+    /**
+     * 白屏兜底：关闭「跳过开屏广告」时走的是宿主原生开屏流程，若广告长时间拉不到，
+     * 宿主可能一直停在只有顶栏/底栏的空壳界面上。这里在回前台 8 秒后检查首页内容
+     * 容器是否仍为空，为空则主动触发一次 gotoMainActivity，避免永久白屏。
+     */
+    public static void maybeRecoverBlankHome(Activity act) {
+        if (act == null || act.isFinishing() || act.isDestroyed()) return;
+        if (!"com.douban.frodo.activity.SplashActivity".equals(act.getClass().getName())) return;
+        // 开启「跳过开屏广告」时模块已强制直达主界面，无需兜底
+        if (PureSettings.getBoolean(act, PureSettings.KEY_SKIP_SPLASH, true)) return;
+        View decor;
+        try {
+            decor = act.getWindow() == null ? null : act.getWindow().getDecorView();
+        } catch (Throwable t) {
+            return;
+        }
+        if (decor == null) return;
+
+        decor.postDelayed(() -> {
+            try {
+                if (act.isFinishing() || act.isDestroyed() || !act.hasWindowFocus()) return;
+                View pager = findViewByEntryName(decor, "view_pager", 0);
+                if (pager instanceof ViewGroup && ((ViewGroup) pager).getChildCount() == 0) {
+                    Method gotoMain = ReflectUtils.findMethod(act.getClass(), "gotoMainActivity");
+                    if (gotoMain != null) {
+                        gotoMain.setAccessible(true);
+                        gotoMain.invoke(act);
+                        Log.w(TAG, "Home content empty after resume, fallback to gotoMainActivity");
+                    }
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "blank home fallback failed: " + t);
+            }
+        }, 8000);
+    }
+
+    private static View findViewByEntryName(View root, String entryName, int depth) {
+        if (root == null || depth > 20) return null;
+        int id = root.getId();
+        if (id != View.NO_ID) {
+            try {
+                if (entryName.equals(root.getResources().getResourceEntryName(id))) return root;
+            } catch (Throwable ignored) {
+            }
+        }
+        if (root instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) root;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View found = findViewByEntryName(group.getChildAt(i), entryName, depth + 1);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    /** 「跳过开屏广告」开关；拿不到 View/Activity 上下文时回退到宿主 Application。 */
+    private static boolean skipSplash(Object thisObject) {
+        return PureSettings.getBoolean(getContext(thisObject), PureSettings.KEY_SKIP_SPLASH, true);
     }
 
     private static Context getContext(Object obj) {
