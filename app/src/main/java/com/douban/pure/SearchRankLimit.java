@@ -27,6 +27,9 @@ final class SearchRankLimit {
             Class<?> pager = cl.loadClass(pkg + "adapter.TrendSubjectPagerAdapter");
             Class<?> model = cl.loadClass(pkg + "model.SearchHots");
             Class<?> view = cl.loadClass(pkg + "view.SearchTrendSubjectView");
+            // Resolve the host class by identity. R8 can fold a class-name comparison
+            // against the module's own, shrinkable Kotlin runtime.
+            Class<?> hostUnit = cl.loadClass("kotlin.Unit");
             Class<?> base = cl.loadClass("com.douban.frodo.baseproject.view.newrecylview.RecyclerArrayAdapter");
             Method add = base.getDeclaredMethod("addAll$default", base, Collection.class, boolean.class, int.class, Object.class);
             if (!Modifier.isStatic(add.getModifiers()) || add.getReturnType() != void.class) return;
@@ -43,7 +46,7 @@ final class SearchRankLimit {
                 Class<?> adapter = cl.loadClass(pkg + "adapter." + spec[2]);
                 Field field = model.getField(spec[1]);
                 Method bind = pager.getDeclaredMethod(spec[0], pager, model, view);
-                if (field.getType() != List.class || !Modifier.isStatic(bind.getModifiers()) || !bind.getReturnType().getName().equals("kotlin.Unit")) continue;
+                if (field.getType() != List.class || !Modifier.isStatic(bind.getModifiers()) || bind.getReturnType() != hostUnit) continue;
                 api.deoptimize(bind);
                 api.hook(bind).intercept(chain -> {
                     Scope prior = active.get();

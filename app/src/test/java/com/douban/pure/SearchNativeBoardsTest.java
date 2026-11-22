@@ -190,6 +190,45 @@ public class SearchNativeBoardsTest {
         assertEquals(Arrays.asList(first,discussion),racing.vpSubject.adapter.k);
     }
 
+    @Test public void rejectedNativeBindRestoresDiscussionAndDoesNotLoopOnLayoutOrRebind() throws Throwable {
+        Map<Executable,XposedInterface.Hooker> hooks=installFixture();
+        XposedInterface.Hooker bind=hooks.get(Fragment.class.getDeclaredMethod("bindData",Hots.class,boolean.class));
+        XposedInterface.Hooker notify=hooks.get(PagerAdapter.class.getMethod("notifyDataSetChanged"));
+        SplashActivity home=Robolectric.buildActivity(SplashActivity.class).setup().get();
+        Queue<Runnable> disk=new ArrayDeque<>(), network=new ArrayDeque<>(), main=new ArrayDeque<>();
+        File cache=new File(home.getCacheDir(),"rejected-native-search-snapshot");
+        SearchBoardStore store=new SearchBoardStore(cache,disk::add,network::add,main::add,
+                (board,request)->SearchBoardStoreTest.json(board),()->PureSettings.shouldReplaceSearchBoards(home),
+                SearchNativeBoards::refreshTracked);
+        field("store").set(null,store);
+        field("main").set(null,new android.os.Handler(android.os.Looper.getMainLooper()));
+        field("appContext").set(null,home.getApplicationContext());
+        Fragment fragment=new Fragment(home);fragment.vpSubject.setId(0x7f0a1980);
+        LinearLayout container=new LinearLayout(home);container.setId(0x7f0a04a8);container.addView(fragment.vpSubject);
+        TouchableNestedScrollView root=new TouchableNestedScrollView(home);root.addView(container);home.setContentView(root);
+        View first=new SearchTrendSubjectView(home),discussion=new View(home);
+        NativeAdapter adapter=fragment.vpSubject.adapter;
+        scopedBind(bind,notify,fragment,first,discussion,"disk-pending");
+        disk.remove().run(); main.remove().run();
+        assertSide(adapter.k.get(1),RankFeed.Board.MOVIE,"加载中",0);
+        adapter.dropNonEmpty=true;
+        network.remove().run(); network.remove().run(); main.remove().run(); main.remove().run();
+        assertEquals(Arrays.asList(first,discussion),adapter.k);
+        int attempts=adapter.inflations;
+        SearchNativeBoards.update(fragment.vpSubject);
+        SearchNativeBoards.refreshTracked();
+        View rebound=new SearchTrendSubjectView(home),reboundDiscussion=new View(home);
+        scopedBind(bind,notify,fragment,rebound,reboundDiscussion,null);
+        assertEquals(attempts,adapter.inflations);
+        adapter.dropNonEmpty=false;
+        set(home,PureSettings.KEY_REPLACE_SEARCH_BOARDS,false);
+        set(home,PureSettings.KEY_REPLACE_SEARCH_BOARDS,true);
+        assertSame(rebound,adapter.k.get(0));
+        assertSide(adapter.k.get(1),RankFeed.Board.MOVIE,"Top1",1);
+        assertSide(adapter.k.get(2),RankFeed.Board.TV,"Top1",1);
+        assertEquals(attempts+2,adapter.inflations);
+    }
+
     private static Field field(String name) throws Exception {
         Field f=SearchNativeBoards.class.getDeclaredField(name);f.setAccessible(true);return f;
     }
@@ -255,9 +294,11 @@ public class SearchNativeBoardsTest {
     public static class NativeAdapter extends PagerAdapter {
         private final List<View> k=new ArrayList<>();
         public void t(Hots hots) {}
+        boolean dropNonEmpty;
+        int inflations;
         private final Context context;
         NativeAdapter(Context context){this.context=context;}
-        public View r(Hots hots){SearchTrendSubjectView page=new SearchTrendSubjectView(context);page.rv.adapter.count=hots.subjects.size();return page;}
+        public View r(Hots hots){SearchTrendSubjectView page=new SearchTrendSubjectView(context);inflations++;page.rv.adapter.count=dropNonEmpty ? 0 : hots.subjects.size();return page;}
         public String q(String title,String count){return title+" "+count;}
     }
     public static class Hots {

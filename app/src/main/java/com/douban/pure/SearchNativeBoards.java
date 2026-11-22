@@ -31,6 +31,10 @@ final class SearchNativeBoards {
         List<View> originalSides;
         boolean replaced, awaitingDisk, failed;
         SearchBoardStore.Snapshot rendered;
+        Object rejectedAdapter;
+        SearchBoardStore.Snapshot rejectedSnapshot;
+        long rejectedGate;
+        boolean rejectedFetchFailure;
 
         State(ViewGroup pager) {this.pager=pager;}
         public void onViewAttachedToWindow(View view) { update(pager); }
@@ -40,6 +44,7 @@ final class SearchNativeBoards {
     private static Context appContext;
     private static Handler main;
     private static boolean enabled;
+    private static long gateGeneration;
     private static Host host;
 
     static void install(XposedInterface api,ClassLoader cl) {
@@ -140,6 +145,7 @@ final class SearchNativeBoards {
     }
 
     private static void setGate(boolean value) {
+        if(enabled!=value) gateGeneration++;
         enabled=value;
         if(store!=null) store.setEnabled(value);
     }
@@ -231,10 +237,24 @@ final class SearchNativeBoards {
         }
         boolean failed=ready==null && store.failed();
         if(state.replaced && !state.awaitingDisk && state.rendered==ready && state.failed==failed) return;
+        if(state.rejectedAdapter==state.adapter && state.rejectedGate==gateGeneration
+                && state.rejectedSnapshot==ready && state.rejectedFetchFailure==failed) return;
+        state.rejectedAdapter=null; state.rejectedSnapshot=null;
         List<RankFeed.Row> movie=ready==null?Collections.emptyList():ready.movie.rows;
         List<RankFeed.Row> tv=ready==null?Collections.emptyList():ready.tv.rows;
-        View moviePage=host.build(state.adapter,RankFeed.Board.MOVIE,movie,failed,()->retry(state));
-        View tvPage=host.build(state.adapter,RankFeed.Board.TV,tv,failed,()->retry(state));
+        View moviePage,tvPage;
+        try {
+            moviePage=host.build(state.adapter,RankFeed.Board.MOVIE,movie,failed,()->retry(state));
+            tvPage=host.build(state.adapter,RankFeed.Board.TV,tv,failed,()->retry(state));
+        } catch(ReflectiveOperationException|RuntimeException|LinkageError e) {
+            // Do not rebuild or log on every layout, foreground event or host rebind.
+            state.rejectedAdapter=state.adapter; state.rejectedSnapshot=ready;
+            state.rejectedGate=gateGeneration; state.rejectedFetchFailure=failed;
+            Log.w("DoubanPure","native side card bind rejected; keeping original discussion",e);
+            if(state.replaced) publish(state,pages,state.originalSides,notify);
+            state.replaced=false; state.awaitingDisk=false; state.rendered=null;
+            return;
+        }
         publish(state,pages,Arrays.asList(moviePage,tvPage),notify);
         state.replaced=true; state.awaitingDisk=false; state.rendered=ready; state.failed=failed;
     }
@@ -328,8 +348,10 @@ final class SearchNativeBoards {
             subjects.set(model,mapped);
             ViewGroup page=(ViewGroup)inflate.invoke(adapter,model);
             Object list=listAdapter(page);
-            if(!rowAdapter.isInstance(list) || (Integer)rowAdapter.getMethod("getItemCount").invoke(list)!=mapped.size())
-                throw new IllegalStateException("Host native bind did not retain all rows");
+            int retained=rowAdapter.isInstance(list) ? (Integer)rowAdapter.getMethod("getItemCount").invoke(list) : -1;
+            if(retained!=mapped.size())
+                throw new IllegalStateException("Host native bind did not retain all rows: "+board+
+                        " expected="+mapped.size()+" actual="+retained);
             TextView title=(TextView)header.invoke(SearchPagerHeight.find(page));
             if(mapped.isEmpty()) {
                 title.setText((CharSequence)format.invoke(adapter,board.title,failed ? "加载失败 · 重试" : "加载中…"));
